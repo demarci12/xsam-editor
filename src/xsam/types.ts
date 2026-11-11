@@ -180,6 +180,10 @@ export interface Chunk {
   tag: ChunkTag
   /** Top-level elements in order (sub-components live under their parent). */
   elementIds: string[]
+  /** MPS folder, e.g. "Security Analysis". */
+  virtualPackage?: string
+  /** DefaultElementType child, e.g. "ElementTypeThreat" for attack steps. */
+  elementType?: string
 }
 
 export interface XsamModel {

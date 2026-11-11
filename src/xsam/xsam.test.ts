@@ -7,7 +7,7 @@ import { FeasibilityEngine } from './feasibility'
 import { impactLevelOf } from './impact'
 import { computeRisks } from '../tara/risk'
 import { emptyExtras } from '../tara/types'
-import { parseXsam, serializeXsam } from './io'
+import { newMpsId, parseXsam, serializeXsam } from './io'
 
 const catalogPath = resolve(__dirname, '../../samples/APCatalog1.3.xsam')
 const catalog = readFileSync(catalogPath, 'utf8')
@@ -16,6 +16,17 @@ const privateModel = (v: string) => {
   const p = resolve(__dirname, `../../samples/private/private-model-${v}.xsam`)
   return existsSync(p) ? readFileSync(p, 'utf8') : null
 }
+
+describe('mps ids', () => {
+  it('generates ids that fit a 64-bit MPS node id', () => {
+    for (let i = 0; i < 500; i++) expect(newMpsId()).toMatch(/^[1-7][0-9a-zA-Z$_]{10}$/)
+  })
+  it('matches the id shape used in the sample', () => {
+    const ids = [...catalog.matchAll(/mps:id="([^"]+)"/g)].map((m) => m[1]).filter((id) => id.length === 11)
+    expect(ids.length).toBeGreaterThan(100)
+    for (const id of ids) expect(id).toMatch(/^[1-9]/)
+  })
+})
 
 describe('expr', () => {
   it('round-trips nested expressions', () => {

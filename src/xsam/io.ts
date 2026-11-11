@@ -28,9 +28,13 @@ export const XSAM_NS = 'http://www.security-analyst.org/xsam'
 export const MPS_NS = 'http://www.itemis.de/mps'
 
 const MPS_ALPHABET = '0123456789abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ$_'
+/**
+ * MPS node ids are 64-bit numbers in base 64 (11 characters): the first character carries only
+ * the top 4 bits. We use 1-7 so the id is a positive long, as in MPS's own exports.
+ */
 export function newMpsId(): string {
   const bytes = crypto.getRandomValues(new Uint8Array(11))
-  return Array.from(bytes, (b) => MPS_ALPHABET[b % 64]).join('')
+  return Array.from(bytes, (b, i) => MPS_ALPHABET[i === 0 ? 1 + (b % 7) : b % 64]).join('')
 }
 
 const CHUNK_TAGS: ChunkTag[] = ['SystemChunk', 'SecurityChunk', 'SecurityConceptChunk']
@@ -130,6 +134,10 @@ export function parseXsam(xml: string): XsamModel {
     }
     if (!CHUNK_TAGS.includes(chunkEl.localName as ChunkTag)) continue
     const chunk: Chunk = { id: mpsId(chunkEl), name: attr(chunkEl, 'name'), tag: chunkEl.localName as ChunkTag, elementIds: [] }
+    const vp = chunkEl.getAttribute('virtualPackage')
+    if (vp) chunk.virtualPackage = vp
+    const et = kids(kid(chunkEl, 'DefaultElementType'))[0]?.localName
+    if (et) chunk.elementType = et
     m.chunks.push(chunk)
     for (const el of kids(kid(chunkEl, 'Elements'))) {
       const id = mpsId(el)
@@ -250,7 +258,12 @@ const same = (a: unknown, b: unknown) => JSON.stringify(a) === JSON.stringify(b)
  * data did not change are left byte-for-byte as they were, and everything the editor
  * doesn't model (reports, controls scenarios, threat classes…) is preserved.
  */
-export function serializeXsam(model: XsamModel, originalXml: string | null): string {
+export interface SerializeOptions {
+  /** Rewrite stored attackFeasibilityLevel / impactLevel wherever they differ from the computed value. */
+  recomputeLevels?: boolean
+}
+
+export function serializeXsam(model: XsamModel, originalXml: string | null, opts: SerializeOptions = {}): string {
   const modelRef = model.modelRef ?? `r:${crypto.randomUUID()}(${model.projectName.replace(/[()]/g, '')})`
   const doc = parseDoc(originalXml || EMPTY_XSAM(modelRef))
   const baseline = originalXml ? parseXsam(originalXml) : emptyModel()
@@ -288,13 +301,16 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
   const used = new Set<string>()
 
   const chunkEls = new Map(kids(root).filter((c) => CHUNK_TAGS.includes(c.localName as ChunkTag)).map((c) => [mpsId(c), c]))
-  const ensureChunk = (chunk: Chunk) => {
+  /** `after`: the previous chunk in model order, so new chunks land next to their siblings. */
+  const ensureChunk = (chunk: Chunk, after?: Element) => {
     let el = chunkEls.get(chunk.id)
     if (!el) {
-      el = mk(chunk.tag, { 'mps:id': chunk.id, name: chunk.name })
+      el = mk(chunk.tag, { 'mps:id': chunk.id, name: chunk.name, ...(chunk.virtualPackage ? { virtualPackage: chunk.virtualPackage } : {}) })
       el.appendChild(mk('Elements'))
-      el.appendChild(mk('DefaultElementType'))
-      root.appendChild(el)
+      const det = el.appendChild(mk('DefaultElementType'))
+      if (chunk.elementType) det.appendChild(mk(chunk.elementType, { 'mps:id': newMpsId() }))
+      if (after && after.parentNode === root) root.insertBefore(el, after.nextSibling)
+      else root.appendChild(el)
       chunkEls.set(chunk.id, el)
     }
     setAttr(el, 'name', chunk.name)
@@ -336,7 +352,7 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
     const prev = baseline.steps[s.id]
     // Only rewrite the stored level when our edits changed it, so stale values in an untouched
     // file are reported in the UI rather than silently rewritten.
-    const levelChanged = fresh || !prev || baseEngine.evaluate(prev.name).level !== level
+    const levelChanged = fresh || !prev || baseEngine.evaluate(prev.name).level !== level || (!!opts.recomputeLevels && el.getAttribute('attackFeasibilityLevel') !== level)
     if (level && levelChanged) setAttr(el, 'attackFeasibilityLevel', level)
     if (!fresh && prev && same({ ...prev, chunkId: 0, storedLevel: 0 }, { ...s, chunkId: 0, storedLevel: 0 })) return el
     baseAttrs(el, s)
@@ -377,7 +393,7 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
     const { el, fresh } = getEl('DamageScenario', d.id)
     const level = impactLevelOf(d)
     const prev = baseline.damageScenarios[d.id]
-    if (fresh || !prev || impactLevelOf(prev) !== level) setAttr(el, 'impactLevel', level)
+    if (fresh || !prev || impactLevelOf(prev) !== level || (opts.recomputeLevels && (el.getAttribute('impactLevel') ?? null) !== level)) setAttr(el, 'impactLevel', level)
     if (!fresh && prev && same({ ...prev, chunkId: 0, storedImpactLevel: 0 }, { ...d, chunkId: 0, storedImpactLevel: 0 })) return el
     baseAttrs(el, d)
     if (fresh || !same(prev?.impacts, d.impacts)) {
@@ -483,8 +499,10 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
     return el
   }
 
+  let prevChunkEl: Element | undefined
   for (const chunk of model.chunks) {
-    const chunkEl = ensureChunk(chunk)
+    const chunkEl = ensureChunk(chunk, prevChunkEl)
+    prevChunkEl = chunkEl
     const elements = ensureKid(chunkEl, 'Elements')
     const wanted: Element[] = []
     for (const id of chunk.elementIds) {
