@@ -1,5 +1,7 @@
 import { useMemo, useState } from 'react'
-import { propertyUsage, reviewState } from '../components/common'
+import { reviewState, toeeName } from '../components/common'
+import { propertySummary } from '../components/SecurityProperties'
+import { threatDamageIssues } from '../tara/consistency'
 import { ImpactBadge, LevelBadge, ReviewChip, RiskBadge } from '../components/Level'
 import { useDocCtx, useUI, type View } from '../context'
 import { computeRisks } from '../tara/risk'
@@ -54,11 +56,8 @@ export function Dashboard() {
   const unratedDs = Object.values(m.damageScenarios).filter((d) => !impactLevelOf(d))
   // Stored impactLevel in the imported file that doesn't match that file's own ratings.
   const staleImpact = Object.values(doc.baseline?.damageScenarios ?? {}).filter((d) => (d.storedImpactLevel ?? null) !== impactLevelOf(d))
-  const undecidedProps = useMemo(() => {
-    let n = 0
-    for (const [key, pm] of propertyUsage(doc)) for (const p of pm.keys()) if (doc.extras.assetProperties?.[key]?.[p] === undefined) n++
-    return n
-  }, [doc])
+  const props = useMemo(() => propertySummary(doc), [doc])
+  const links = useMemo(() => threatDamageIssues(doc.model), [doc.model])
   const top = [...risks].sort((a, b) => (b.risk ?? 0) - (a.risk ?? 0)).slice(0, 8)
   const approved = items.filter((i) => i.status === 'Approved').length
 
@@ -143,15 +142,32 @@ export function Dashboard() {
                 {staleImpact.length > 3 ? '…' : ''}). The tool uses the ratings; let MPS recompute. <a onClick={() => setView('damage')}>Show</a>
               </li>
             ) : null}
-            {undecidedProps ? (
+            {links.mismatches.length ? (
+              <li className="warn">
+                <b>{links.mismatches.length}</b> threat → damage scenario links where the damage scenario doesn't list the threat's asset and property (e.g.{' '}
+                {links.mismatches
+                  .slice(0, 2)
+                  .map((x) => `${x.ts.name} → ${doc.model.damageScenarios[x.dsId]?.name}: ${toeeName(doc, x.asset).name}/${x.property}`)
+                  .join('; ')}
+                ). <a onClick={() => setView('threat')}>Show</a>
+              </li>
+            ) : null}
+            {links.uncovered.length ? (
               <li>
-                <b>{undecidedProps}</b> asset security properties are used by damage scenarios but not yet decided in the item definition. <a onClick={() => setView('item')}>Decide</a>
+                <b>{links.uncovered.length}</b> damage-scenario asset/property pairs are not reached by any linked threat scenario.
+              </li>
+            ) : null}
+            {props.conflict || props.gap ? (
+              <li className="warn">
+                Security properties: {props.conflict ? `${props.conflict} marked not relevant although damage scenarios use them` : ''}
+                {props.conflict && props.gap ? '; ' : ''}
+                {props.gap ? `${props.gap} marked relevant without a damage scenario` : ''}. <a onClick={() => setView('item')}>Review</a>
               </li>
             ) : null}
             {noTree.length ? <li><b>{noTree.length}</b> threat scenarios have no attack tree.</li> : null}
             {noDs.length ? <li><b>{noDs.length}</b> threat scenarios are not linked to a damage scenario.</li> : null}
             {unratedDs.length ? <li><b>{unratedDs.length}</b> damage scenarios have no impact rating (out of scope?).</li> : null}
-            {!stale.length && !staleImpact.length && !untreated.length && !undecidedProps && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
+            {!stale.length && !staleImpact.length && !untreated.length && !links.mismatches.length && !links.uncovered.length && !props.conflict && !props.gap && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
           </ul>
         </div>
         <div className="card">

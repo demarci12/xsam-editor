@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react'
 import { reviewState, useFilter, EditedMark, ToeeChip, propertyUsage } from '../components/common'
-import { CELL_TITLE, PROPERTY_SHORT, cellState } from '../components/SecurityProperties'
+import { CELL_MARK, CELL_TITLE, PROPERTY_SHORT, cellState, propertySummary } from '../components/SecurityProperties'
 import { ImpactBadge, LevelBadge, ReviewChip, RiskBadge } from '../components/Level'
 import { useDocCtx, useUI } from '../context'
 import { computeRisks, type RiskRow } from '../tara/risk'
@@ -304,26 +304,15 @@ function PropertyMatrix() {
     ...Object.values(doc.model.channels).map((c) => ({ ref: { kind: 'channel' as const, id: c.id }, name: c.name, title: c.title })),
   ].sort((a, b) => a.ref.kind.localeCompare(b.ref.kind) || natural(a.name, b.name))
   const shown = hideEmpty ? assets.filter((a) => usage.has(`${a.ref.kind}:${a.ref.id}`) || doc.extras.assetProperties?.[`${a.ref.kind}:${a.ref.id}`]) : assets
-  let decided = 0
-  let openUsed = 0
-  let conflicts = 0
-  for (const a of assets) {
-    const key = `${a.ref.kind}:${a.ref.id}`
-    for (const p of CS_PROPERTIES) {
-      const st = cellState(doc.extras.assetProperties?.[key]?.[p]?.relevant, usage.get(key)?.get(p)?.length ?? 0)
-      if (st === 'relevant' || st === 'not-relevant') decided++
-      if (st === 'used-unset') openUsed++
-      if (st === 'used-excluded') conflicts++
-    }
-  }
+  const sum = propertySummary(doc)
   return (
     <div className="prop-matrix">
       <div className="toolbar">
         <h2>
-          Security properties <span className="muted">{decided} decided</span>
+          Security properties <span className="muted">{sum['from-ds']} relevant from damage scenarios</span>
         </h2>
-        {openUsed ? <span className="warn small">{openUsed} used by damage scenarios but not decided</span> : null}
-        {conflicts ? <span className="warn small">{conflicts} marked not relevant but used</span> : null}
+        {sum.gap ? <span className="warn small">{sum.gap} marked relevant without a damage scenario</span> : null}
+        {sum.conflict ? <span className="warn small">{sum.conflict} marked not relevant but used by damage scenarios</span> : null}
         <span className="grow" />
         <label className="small">
           <input type="checkbox" checked={hideEmpty} onChange={(e) => setHideEmpty(e.target.checked)} /> only assets in use
@@ -362,9 +351,12 @@ function PropertyMatrix() {
                       key={p}
                       className={`c pcell ps-${st}`}
                       title={`${CS_PROPERTY_LABEL[p]}: ${CELL_TITLE[st]}${uses.length ? `\nDamage scenarios: ${uses.join(', ')}` : ''}${e?.rationale ? `\nRationale: ${e.rationale}` : ''}`}
-                      onClick={() => doc.actions.setAssetProperty(key, p, e === undefined ? { relevant: true } : e.relevant ? { relevant: false } : null)}
+                      onClick={() =>
+                        // Properties used by damage scenarios come from the model: open the asset to see which.
+                        uses.length ? select({ kind: a.ref.kind, id: a.ref.id }) : doc.actions.setAssetProperty(key, p, e === undefined ? { relevant: false } : e.relevant === false ? { relevant: true } : null)
+                      }
                     >
-                      <span className="pmark">{st === 'relevant' ? '●' : st === 'not-relevant' || st === 'used-excluded' ? '○' : st === 'used-unset' ? '?' : '·'}</span>
+                      <span className="pmark">{CELL_MARK[st]}</span>
                       {uses.length ? <sub>{uses.length}</sub> : null}
                       <span className="sr">{PROPERTY_SHORT[p]}</span>
                     </td>
@@ -376,7 +368,7 @@ function PropertyMatrix() {
         </tbody>
       </table>
       <p className="muted small legend-row">
-        <span className="pmark">●</span> relevant · <span className="pmark">○</span> not relevant · <span className="pmark">?</span> used by damage scenarios, not decided · small number = damage scenarios using it. Click a cell to change it; open an asset for rationale.
+        <span className="pmark">●</span> relevant (used by the damage scenarios, small number = how many) · <span className="pmark">◐</span> marked relevant, no damage scenario yet · <span className="pmark">○</span> not relevant · <span className="pmark">!</span> contradiction · <span className="pmark">·</span> unused, undecided. Relevance comes from the damage scenarios; for unused cells, click to mark not relevant / relevant.
       </p>
     </div>
   )

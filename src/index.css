@@ -437,19 +437,20 @@ table.matrix.edit select { background: #ffffffb3; color: #1b2230; border: none; 
 .prop-row .uses { font-size: 11px; text-align: right; }
 .prop-row .rationale, .prop-row .prop-note { grid-column: 1 / -1; }
 .prop-row .rationale { font-size: 11.5px; padding: 3px 8px; }
-.prop-row.ps-used-unset .prop-name { color: var(--warn); }
-.prop-row.ps-used-excluded .prop-name { color: var(--danger-text); }
+.prop-row.ps-gap .prop-name { color: var(--warn); }
+.prop-row .prop-state { font-size: 11.5px; font-weight: 500; }
+.prop-row.ps-conflict .prop-name { color: var(--danger-text); }
 .prop-matrix { margin-top: 26px; }
 table.grid.pm td.pcell { cursor: pointer; user-select: none; font-size: 14px; width: 92px; position: relative; }
 table.grid.pm td.pcell:hover { background: var(--panel-2); }
 table.grid.pm td.pcell sub { font-size: 9.5px; color: var(--muted); margin-left: 2px; }
 .pcell .sr { display: none; }
-.pcell.ps-relevant .pmark { color: var(--accent); }
+.pcell.ps-from-ds .pmark { color: var(--accent); }
 .pcell.ps-not-relevant .pmark { color: var(--muted); }
-.pcell.ps-used-unset { background: var(--rv-amber-bg); }
-.pcell.ps-used-unset .pmark { color: var(--warn); font-weight: 700; }
-.pcell.ps-used-excluded { background: var(--rv-orange-bg); }
-.pcell.ps-used-excluded .pmark { color: var(--danger-text); }
+.pcell.ps-gap { background: var(--rv-amber-bg); }
+.pcell.ps-gap .pmark { color: var(--warn); font-weight: 700; }
+.pcell.ps-conflict { background: var(--rv-orange-bg); }
+.pcell.ps-conflict .pmark { color: var(--danger-text); font-weight: 700; }
 .pcell.ps-unset .pmark { color: var(--line); }
 .legend-row .pmark { font-size: 13px; }
 

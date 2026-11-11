@@ -1,6 +1,7 @@
 import { useMemo, useState } from 'react'
 import { useDocCtx, useUI } from '../context'
 import type { Owner } from '../store'
+import { threatDamageIssues, threatProperty } from '../tara/consistency'
 import { computeRisks } from '../tara/risk'
 import { DEFAULT_CONTROL_META, TREATMENTS, type TreatmentDecision } from '../tara/types'
 import { formatExpr, getAt, refsOf, type ExprPath } from '../xsam/expr'
@@ -539,6 +540,20 @@ function ThreatPanel({ t }: { t: ThreatScenario }) {
         <ToeePicker value={t.actedOn} onChange={(v) => upd({ actedOn: v })} />
       </Section>
 
+      {(() => {
+        const prop = threatProperty(t)
+        const bad = threatDamageIssues({ ...doc.model, threatScenarios: { [t.id]: t } }).mismatches
+        return (
+          <p className={bad.length ? 'warn small' : 'muted small'}>
+            Violated property: <b>{prop ? CS_PROPERTY_LABEL[prop] : 'unknown (no STRIDE category in the title)'}</b>.
+            {bad.length
+              ? ` ${bad.length} linked damage scenario(s) don't list ${t.actedOn.map((a) => toeeName(doc, a).name).join(', ')} / ${prop}: ${[...new Set(bad.map((x) => doc.model.damageScenarios[x.dsId]?.name))].join(', ')}.`
+              : prop && t.damageScenarioIds.length
+                ? ' All linked damage scenarios list this asset and property.'
+                : ''}
+          </p>
+        )
+      })()}
       <Section title={`Damage scenarios (${t.damageScenarioIds.length})`}>
         <MultiPicker
           options={dsOpts}

@@ -7,6 +7,7 @@ import { FeasibilityEngine } from './feasibility'
 import { impactLevelOf } from './impact'
 import { computeRisks } from '../tara/risk'
 import { emptyExtras } from '../tara/types'
+import { threatDamageIssues, threatProperty } from '../tara/consistency'
 import { newMpsId, parseXsam, serializeXsam } from './io'
 
 const catalogPath = resolve(__dirname, '../../samples/APCatalog1.3.xsam')
@@ -143,6 +144,18 @@ describe.skipIf(!priv)(`private model ${version}`, () => {
     expect(again.controls[old.id].title).toBe('Renamed')
     expect(again.controls[gone.id]).toBeUndefined()
     expect(Object.keys(again.controls)).toHaveLength(9)
+  })
+
+  it('threat scenarios and damage scenarios agree on asset and property', () => {
+    for (const ts of Object.values(m!.threatScenarios)) expect(threatProperty(ts), ts.name).not.toBeNull()
+    const { mismatches, uncovered } = threatDamageIssues(m!)
+    expect(mismatches).toEqual([])
+    expect(uncovered).toEqual([])
+    // A damage scenario that drops the asset is reported.
+    const mm = structuredClone(m!)
+    const ts = Object.values(mm.threatScenarios).find((t) => t.damageScenarioIds.length)!
+    mm.damageScenarios[ts.damageScenarioIds[0]].assets = []
+    expect(threatDamageIssues(mm).mismatches.length).toBeGreaterThan(0)
   })
 
   it('persists new damage and threat scenarios with links', () => {
