@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { emptyExtras, type AssetProperty, type Claim, type Control, type Goal, type ReviewComment, type ReviewKey, type ReviewRecord, type TaraExtras, type TaraSettings, type Treatment } from './tara/types'
+import { DEFAULT_CONTROL_META, emptyExtras, type AssetProperty, type Claim, type ControlMeta, type Goal, type ReviewComment, type ReviewKey, type ReviewRecord, type TaraExtras, type TaraSettings, type Treatment } from './tara/types'
 import { addRef, refsOf, removeAt, removeRefsTo, renameRef, setGate, wrapInGate, type ExprPath } from './xsam/expr'
 import { FeasibilityEngine } from './xsam/feasibility'
 import { newMpsId, parseXsam } from './xsam/io'
@@ -27,9 +27,10 @@ export const COLLECTION = {
   component: 'components',
   data: 'data',
   channel: 'channels',
+  control: 'controls',
 } as const satisfies Record<ElementKind, keyof XsamModel>
 
-const PREFIX: Record<ElementKind, string> = { step: 'ASC.', damage: 'DS.', threat: 'TS.', component: 'Cmp.', data: 'Data.', channel: 'Ch.' }
+const PREFIX: Record<ElementKind, string> = { step: 'ASC.', damage: 'DS.', threat: 'TS.', component: 'Cmp.', data: 'Data.', channel: 'Ch.', control: 'SC.' }
 /** Default chunk name per kind when the model has to create one. */
 const CHUNK_FOR: Record<ElementKind, { name: string; tag: Chunk['tag'] }> = {
   step: { name: 'Attack Steps', tag: 'SecurityChunk' },
@@ -38,6 +39,7 @@ const CHUNK_FOR: Record<ElementKind, { name: string; tag: Chunk['tag'] }> = {
   component: { name: 'Components', tag: 'SystemChunk' },
   data: { name: 'Data', tag: 'SystemChunk' },
   channel: { name: 'Channels', tag: 'SystemChunk' },
+  control: { name: 'Controls', tag: 'SecurityChunk' },
 }
 
 const EMPTY: DocState = { model: emptyModel(), extras: emptyExtras(), originalXml: null, fileName: 'untitled.xsam' }
@@ -70,6 +72,16 @@ async function idbSet(key: string, value: unknown) {
   })
 }
 
+/** Fill in fields added in later versions so older autosaves and project files keep working. */
+export function migrateDoc(d: Partial<DocState>): DocState {
+  return {
+    ...EMPTY,
+    ...d,
+    model: { ...emptyModel(), ...d.model },
+    extras: { ...emptyExtras(), ...d.extras, settings: { ...emptyExtras().settings, ...d.extras?.settings } },
+  } as DocState
+}
+
 export function nextName(existing: string[], prefix: string): string {
   let max = 0
   const re = new RegExp(`^${prefix.replace(/\./g, '\\.')}(\\d+)$`)
@@ -98,7 +110,7 @@ export function useDoc() {
 
   useEffect(() => {
     idbGet<DocState>('doc')
-      .then((d) => d && setState({ ...EMPTY, ...d, extras: { ...emptyExtras(), ...d.extras } }))
+      .then((d) => d && setState(migrateDoc(d)))
       .catch(() => {})
       .finally(() => setLoaded(true))
   }, [])
@@ -241,12 +253,11 @@ export function useDoc() {
                 Object.entries(next.threatScenarios).map(([k, t]) => [k, { ...t, threatenedBy: renameRef(t.threatenedBy, from, to) }]),
               ),
             }
-            extras = {
-              ...extras,
-              controls: Object.fromEntries(
-                Object.entries(extras.controls).map(([k, c]) => [k, { ...c, stepNames: c.stepNames.map((n) => (n === from ? to : n)) }]),
-              ),
-            }
+          }
+          if (kind === 'control' && p.name && p.name !== old.name) {
+            const from = old.name
+            const to = p.name
+            next = { ...next, steps: Object.fromEntries(Object.entries(next.steps).map(([k, st]) => [k, { ...st, mitigatedBy: renameRef(st.mitigatedBy, from, to) }])) }
           }
           if (p.chunkId && p.chunkId !== old.chunkId) {
             next = {
@@ -276,6 +287,7 @@ export function useDoc() {
             title: 'New attack step',
             ratings: { Knowledge: { value: 0 }, Opportunity: { value: 0 }, Expertise: { value: 0 }, Equipment: { value: 0 }, Time: { value: 0 } },
             refinedBy: null,
+            mitigatedBy: null,
             actedOn: [],
           },
           damage: { ...base, title: 'New damage scenario', impacts: {}, assets: [], scale: null },
@@ -283,6 +295,7 @@ export function useDoc() {
           component: { ...base, title: 'New component', parentId: null, storedData: [] },
           data: { ...base, title: 'New data' },
           channel: { ...base, title: 'New channel', endpoints: [] },
+          control: { ...base, title: 'New control', classRef: null, effects: ['RemoveAllDamage'], ratings: {}, actedOn: [] },
         }
         commitModel((m0) => {
           const [m, chunkId] = ensureChunk(m0, kind, init.chunkId)
@@ -320,7 +333,12 @@ export function useDoc() {
                 Object.entries(m.threatScenarios).map(([k, t]) => [k, { ...t, threatenedBy: removeRefsTo(t.threatenedBy, el.name) }]),
               ),
             }
-            extras = { ...extras, controls: Object.fromEntries(Object.entries(extras.controls).map(([k, c]) => [k, { ...c, stepNames: c.stepNames.filter((n) => n !== el.name) }])) }
+          }
+          if (kind === 'control') {
+            m = { ...m, steps: Object.fromEntries(Object.entries(m.steps).map(([k, st]) => [k, { ...st, mitigatedBy: removeRefsTo(st.mitigatedBy, el.name) }])) }
+            const { [id]: _m, ...controlMeta } = extras.controlMeta ?? {}
+            void _m
+            extras = { ...extras, controlMeta }
           }
           if (kind === 'damage') {
             m = { ...m, threatScenarios: Object.fromEntries(Object.entries(m.threatScenarios).map(([k, t]) => [k, { ...t, damageScenarioIds: t.damageScenarioIds.filter((x) => x !== id) }])) }
@@ -387,7 +405,7 @@ export function useDoc() {
             ...x,
             goals,
             treatments: Object.fromEntries(Object.entries(x.treatments).map(([k, t]) => [k, { ...t, goalIds: t.goalIds.filter((g) => g !== id) }])),
-            controls: Object.fromEntries(Object.entries(x.controls).map(([k, c]) => [k, { ...c, goalIds: c.goalIds.filter((g) => g !== id) }])),
+            controlMeta: Object.fromEntries(Object.entries(x.controlMeta ?? {}).map(([k, c]) => [k, { ...c, goalIds: c.goalIds.filter((g) => g !== id) }])),
           }
         })
       },
@@ -406,29 +424,18 @@ export function useDoc() {
           return { ...x, claims, treatments: Object.fromEntries(Object.entries(x.treatments).map(([k, t]) => [k, { ...t, claimIds: t.claimIds.filter((c) => c !== id) }])) }
         })
       },
-      addControl(init: Partial<Control> = {}): Control {
-        const c: Control = {
-          id: newMpsId(),
-          name: nextName(Object.values(extras.controls).map((x) => x.name), 'CTRL.'),
-          title: 'New control',
-          description: '',
-          stepNames: [],
-          floors: {},
-          goalIds: [],
-          status: 'Planned',
-          ...init,
-        }
-        commitExtras((x) => ({ ...x, controls: { ...x.controls, [c.id]: c } }))
-        return c
+      setControlMeta(id: string, patch: Partial<ControlMeta>) {
+        commitExtras((x) => ({ ...x, controlMeta: { ...x.controlMeta, [id]: { ...DEFAULT_CONTROL_META, ...(x.controlMeta?.[id] ?? {}), ...patch } } }))
       },
-      updateControl(id: string, patch: Partial<Control>) {
-        commitExtras((x) => ({ ...x, controls: { ...x.controls, [id]: { ...x.controls[id], ...patch } } }))
-      },
-      removeControl(id: string) {
-        commitExtras((x) => {
-          const { [id]: _c, ...controls } = x.controls
-          void _c
-          return { ...x, controls }
+      /** Add or remove a control from a step's mitigatedBy (several controls are combined with AND, as MPS does). */
+      setMitigation(stepId: string, controlName: string, on: boolean) {
+        commitModel((m) => {
+          const st = m.steps[stepId]
+          if (!st) return m
+          const has = refsOf(st.mitigatedBy).includes(controlName)
+          if (on === has) return m
+          const mitigatedBy = on ? addRef(st.mitigatedBy, [], controlName, 'and') : removeRefsTo(st.mitigatedBy, controlName)
+          return { ...m, steps: { ...m.steps, [stepId]: { ...st, mitigatedBy } } }
         })
       },
       setAssetProperty(assetKey: string, property: string, patch: Partial<AssetProperty> | null) {
@@ -462,7 +469,7 @@ export function useDoc() {
         })
       },
     }
-  }, [commit, commitModel, commitExtras, model, extras.goals, extras.claims, extras.controls, extras.settings.reviewer])
+  }, [commit, commitModel, commitExtras, model, extras.goals, extras.claims, extras.settings.reviewer])
 
   return {
     ...state,

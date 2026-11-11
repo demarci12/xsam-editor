@@ -5,13 +5,17 @@ import { describe, expect, it } from 'vitest'
 import { addRef, formatExpr, parseExpr, removeAt, setGate } from './expr'
 import { FeasibilityEngine } from './feasibility'
 import { impactLevelOf } from './impact'
+import { computeRisks } from '../tara/risk'
+import { emptyExtras } from '../tara/types'
 import { parseXsam, serializeXsam } from './io'
 
 const catalogPath = resolve(__dirname, '../../samples/APCatalog1.3.xsam')
 const catalog = readFileSync(catalogPath, 'utf8')
 // Confidential customer model: only present on machines that have it (git-ignored).
-const privatePath = resolve(__dirname, '../../samples/private/private-model-v10.xsam')
-const priv = existsSync(privatePath) ? readFileSync(privatePath, 'utf8') : null
+const privateModel = (v: string) => {
+  const p = resolve(__dirname, `../../samples/private/private-model-${v}.xsam`)
+  return existsSync(p) ? readFileSync(p, 'utf8') : null
+}
 
 describe('expr', () => {
   it('round-trips nested expressions', () => {
@@ -57,10 +61,12 @@ function commonChecks(name: string, xml: () => string, staleLevel: (stepName: st
 
 commonChecks('APCatalog sample', () => catalog)
 
-describe.skipIf(!priv)('private model', () => {
+for (const version of ['v10', 'v12']) {
+  const priv = privateModel(version)
+describe.skipIf(!priv)(`private model ${version}`, () => {
   // The AS.TS.* threat-scenario roots are stored as "High" although their children compute
   // to Low/Medium (e.g. AS.TS.5 = ASC.UDS.012 which itself is stored Low): stale in the file.
-  commonChecks('private', () => priv!, (n) => n.startsWith('AS.TS.'))
+  commonChecks(`private ${version}`, () => priv!, (n) => n.startsWith('AS.TS.'))
   const m = priv ? parseXsam(priv) : null
 
   it('parses the whole TARA', () => {
@@ -74,10 +80,54 @@ describe.skipIf(!priv)('private model', () => {
   })
 
   it('reproduces every stored impact level', () => {
+    // v12 added impact ratings outside MPS without recomputing impactLevel for these.
+    const staleV12 = ['DS.EBS.3.1', 'DS.EBS.3.2', 'DS.EBS.3.3', 'DS.EBS.3.4', 'DS.EBS.3.5', 'DS.EBS.3.6', 'DS.EBS.3.7', 'DS.EBS.3.8', 'DS.X.2']
     const bad = Object.values(m!.damageScenarios)
       .map((d) => ({ name: d.name, stored: d.storedImpactLevel ?? null, computed: impactLevelOf(d) }))
-      .filter((r) => r.stored !== r.computed)
+      .filter((r) => r.stored !== r.computed && !(version === 'v12' && staleV12.includes(r.name)))
     expect(bad).toEqual([])
+  })
+
+  it.runIf(version === 'v12')('reads security controls and mitigations', () => {
+    expect(Object.keys(m!.controls)).toHaveLength(9)
+    const ctrl = Object.values(m!.controls).find((c) => c.name === 'SC.5.2')!
+    expect(ctrl.effects).toEqual(['RemoveAllDamage'])
+    const uds012 = Object.values(m!.steps).find((s) => s.name === 'ASC.UDS.012')!
+    expect(formatExpr(uds012.mitigatedBy)).toBe('and(SC.1.3, SC.2.0, SC.5.2)')
+    expect(Object.values(m!.steps).filter((s) => s.mitigatedBy)).toHaveLength(18)
+  })
+
+  it.runIf(version === 'v12')('residual risk removes mitigated paths and never exceeds the risk', () => {
+    const rows = computeRisks(m!, emptyExtras(), new FeasibilityEngine(Object.values(m!.steps)))
+    for (const r of rows) if (r.risk && r.residualRisk) expect(r.residualRisk).toBeLessThanOrEqual(r.risk)
+    // TS.5 = AS.TS.5 = ASC.UDS.012, which is mitigated by applied controls: no path left.
+    expect(rows.find((r) => r.ts.name === 'TS.5')!.residualBlocked).toBe(true)
+    // Planned controls don't count.
+    const extras = emptyExtras()
+    for (const c of Object.values(m!.controls)) extras.controlMeta[c.id] = { status: 'Planned', goalIds: [] }
+    const planned = computeRisks(m!, extras, new FeasibilityEngine(Object.values(m!.steps)))
+    expect(planned.every((r) => !r.residualBlocked && r.residualRisk === r.risk)).toBe(true)
+  })
+
+  it.runIf(version === 'v12')('edits, adds and deletes controls and mitigations', () => {
+    const mm = structuredClone(m!)
+    const ctrlChunk = mm.chunks.find((c) => c.name === 'Controls')!
+    mm.controls.NEWC = { id: 'NEWC', name: 'SC.99', title: 'New', description: 'd', chunkId: ctrlChunk.id, classRef: null, effects: ['RemoveAllDamage'], ratings: { Expertise: { value: 6 } }, actedOn: [] }
+    ctrlChunk.elementIds.push('NEWC')
+    const step = Object.values(mm.steps).find((s) => s.name === 'ASC.CAN.012')!
+    step.mitigatedBy = parseExpr('SC.99')
+    const old = Object.values(mm.controls).find((c) => c.name === 'SC.9.1')!
+    old.title = 'Renamed'
+    const gone = Object.values(mm.controls).find((c) => c.name === 'SC.8.1')!
+    delete mm.controls[gone.id]
+    ctrlChunk.elementIds = ctrlChunk.elementIds.filter((x) => x !== gone.id)
+    const again = parseXsam(serializeXsam(mm, priv))
+    expect(again.controls.NEWC.ratings.Expertise?.value).toBe(6)
+    expect(again.controls.NEWC.effects).toEqual(['RemoveAllDamage'])
+    expect(formatExpr(again.steps[step.id].mitigatedBy)).toBe('SC.99')
+    expect(again.controls[old.id].title).toBe('Renamed')
+    expect(again.controls[gone.id]).toBeUndefined()
+    expect(Object.keys(again.controls)).toHaveLength(9)
   })
 
   it('persists new damage and threat scenarios with links', () => {
@@ -114,3 +164,4 @@ describe.skipIf(!priv)('private model', () => {
     expect(Object.keys(again.threatScenarios)).toHaveLength(36)
   })
 })
+}

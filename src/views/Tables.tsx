@@ -5,6 +5,7 @@ import { ImpactBadge, LevelBadge, ReviewChip, RiskBadge } from '../components/Le
 import { useDocCtx, useUI } from '../context'
 import { computeRisks, type RiskRow } from '../tara/risk'
 import { impactIndex, impactLevelOf } from '../xsam/impact'
+import { refsOf } from '../xsam/expr'
 import { CATEGORIES, CATEGORY_PREFIX, CS_PROPERTIES, CS_PROPERTY_LABEL, IMPACT_CATEGORIES, IMPACT_LEVELS, type Component, type ToeeRef } from '../xsam/types'
 
 const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
@@ -488,7 +489,8 @@ export function RisksView() {
                   {(t?.claimIds ?? []).length ? ` ${(t?.claimIds ?? []).map((g) => doc.extras.claims[g]?.name).join(', ')}` : ''}
                 </td>
                 <td>
-                  <RiskBadge value={r.residualRisk} />
+                  <RiskBadge value={r.residualRisk} title={r.residualBlocked ? 'All attack paths removed by controls' : 'Residual risk with controls'} />
+                  {r.residualBlocked ? <span className="muted small"> 🛡</span> : null}
                 </td>
                 <td>
                   <Rv kind="risk" id={r.ts.id} />
@@ -552,14 +554,18 @@ export function ConceptView() {
 export function ControlsView() {
   const doc = useDocCtx()
   const { selection, select } = useUI()
-  const controls = Object.values(doc.extras.controls).sort((a, b) => natural(a.name, b.name))
+  const controls = Object.values(doc.model.controls).sort((a, b) => natural(a.name, b.name))
+  const stepsFor = useMemo(() => {
+    const m = new Map<string, number>()
+    for (const s of Object.values(doc.model.steps)) for (const n of refsOf(s.mitigatedBy)) m.set(n, (m.get(n) ?? 0) + 1)
+    return m
+  }, [doc.model.steps])
+  const { filtered, box } = useFilter(controls, (c) => `${c.name} ${c.title} ${c.description}`)
   return (
     <div className="view">
-      <Toolbar title="Controls" count={controls.length} box={null} addLabel="Control" onAdd={() => select({ kind: 'control', id: doc.actions.addControl().id })} />
+      <Toolbar title="Security controls" count={controls.length} box={box} addLabel="Control" onAdd={() => select({ kind: 'control', id: doc.actions.add('control').id })} />
       {controls.length === 0 ? (
-        <p className="muted empty-note">
-          A control raises the attack potential of the attack steps it mitigates (e.g. secure boot: Expertise ≥ 6, Equipment ≥ 7). Residual risk is recomputed from that.
-        </p>
+        <p className="muted empty-note">No security controls in this model yet. A control mitigates attack steps (XSAM <code>mitigatedBy</code>); residual risk removes those steps from the attack paths, or raises them to the attack potential needed to bypass the control.</p>
       ) : null}
       <table className="grid">
         <thead>
@@ -573,26 +579,26 @@ export function ControlsView() {
           </tr>
         </thead>
         <tbody>
-          {controls.map((c) => (
-            <tr key={c.id} className={selection?.kind === 'control' && 'id' in selection && selection.id === c.id ? 'sel' : ''} onClick={() => select({ kind: 'control', id: c.id })}>
-              <td>
-                <code>{c.name}</code>
-              </td>
-              <td className="wide">{c.title}</td>
-              <td className="small">
-                {CATEGORIES.filter((k) => c.floors[k] !== undefined)
-                  .map((k) => `${CATEGORY_PREFIX[k]}≥${c.floors[k]}`)
-                  .join(' ')}
-              </td>
-              <td className="c">{c.stepNames.length}</td>
-              <td>
-                <span className="tag">{c.status}</span>
-              </td>
-              <td>
-                <Rv kind="control" id={c.id} />
-              </td>
-            </tr>
-          ))}
+          {filtered.map((c) => {
+            const meta = doc.extras.controlMeta?.[c.id]
+            const rated = CATEGORIES.filter((k) => c.ratings[k])
+            return (
+              <tr key={c.id} className={selection?.kind === 'control' && 'id' in selection && selection.id === c.id ? 'sel' : ''} onClick={() => select({ kind: 'control', id: c.id })}>
+                <td>
+                  <code>{c.name}</code> <EditedMark kind="control" id={c.id} />
+                </td>
+                <td className="wide">{c.title}</td>
+                <td className="small">{rated.length ? rated.map((k) => `${CATEGORY_PREFIX[k]}≥${c.ratings[k]!.value}`).join(' ') : c.effects.includes('RemoveAllDamage') ? 'Removes damage' : c.effects.join(', ') || '–'}</td>
+                <td className="c">{stepsFor.get(c.name) ?? 0}</td>
+                <td>
+                  <span className={`tag ${meta?.status === 'Planned' ? 'muted' : ''}`}>{meta?.status ?? 'Implemented'}</span>
+                </td>
+                <td>
+                  <Rv kind="control" id={c.id} />
+                </td>
+              </tr>
+            )
+          })}
         </tbody>
       </table>
     </div>

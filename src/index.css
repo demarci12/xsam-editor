@@ -452,3 +452,9 @@ table.grid.pm td.pcell sub { font-size: 9.5px; color: var(--muted); margin-left:
 .pcell.ps-used-excluded .pmark { color: var(--danger-text); }
 .pcell.ps-unset .pmark { color: var(--line); }
 .legend-row .pmark { font-size: 13px; }
+
+/* controls */
+.shield { font-size: 10px; color: var(--ok); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; max-width: 120px; }
+label.check { display: flex; gap: 8px; align-items: center; cursor: pointer; margin-bottom: 6px; }
+label.check input { width: auto; }
+.tag.muted { opacity: 0.6; }

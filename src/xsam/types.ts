@@ -70,8 +70,26 @@ export interface AttackStep {
   chunkId: string
   ratings: Partial<Record<Category, Rating>>
   refinedBy: Expr | null
+  /** Security controls that mitigate this step, e.g. `and(SC.1.3, SC.2.0)`. */
+  mitigatedBy: Expr | null
   actedOn: ToeeRef[]
   storedLevel?: string
+}
+
+/** XSAM security control (instance of a control-catalog class). */
+export interface SecurityControl {
+  id: string
+  name: string
+  title: string
+  description: string
+  chunkId: string
+  /** Reference to the catalog control class (external), kept verbatim. */
+  classRef: string | null
+  /** Effect element names, e.g. ['RemoveAllDamage']. */
+  effects: string[]
+  /** Attack potential an attacker needs to overcome the control (optional). */
+  ratings: Partial<Record<Category, Rating>>
+  actedOn: ToeeRef[]
 }
 
 export interface ImpactEntry {
@@ -174,6 +192,7 @@ export interface XsamModel {
   components: Record<string, Component>
   data: Record<string, DataElement>
   channels: Record<string, Channel>
+  controls: Record<string, SecurityControl>
   checklist: { id: string; name: string; groups: ChecklistGroup[] } | null
 }
 
@@ -187,7 +206,8 @@ export const emptyModel = (): XsamModel => ({
   components: {},
   data: {},
   channels: {},
+  controls: {},
   checklist: null,
 })
 
-export type ElementKind = 'step' | 'damage' | 'threat' | 'component' | 'data' | 'channel'
+export type ElementKind = 'step' | 'damage' | 'threat' | 'component' | 'data' | 'channel' | 'control'

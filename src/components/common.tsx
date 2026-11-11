@@ -3,6 +3,7 @@ import { useDocCtx, type Selection } from '../context'
 import { COLLECTION, elementHash, type Doc } from '../store'
 import type { ReviewKind, ReviewRecord } from '../tara/types'
 import type { ToeeRef } from '../xsam/types'
+import { refsOf } from '../xsam/expr'
 
 export function Field({ label, value, onChange, multiline, placeholder }: { label: string; value: string; onChange: (v: string) => void; multiline?: boolean; placeholder?: string }) {
   return (
@@ -33,7 +34,11 @@ export function Section({ title, children, right }: { title: ReactNode; children
 export function reviewTarget(doc: Doc, kind: ReviewKind, id: string): unknown {
   if (kind === 'risk') return { t: doc.extras.treatments[id], ts: doc.model.threatScenarios[id] }
   if (kind === 'goal') return doc.extras.goals[id]
-  if (kind === 'control') return doc.extras.controls[id]
+  if (kind === 'control') {
+    const meta = doc.extras.controlMeta?.[id]
+    const steps = Object.values(doc.model.steps).filter((s) => refsOf(s.mitigatedBy).includes(doc.model.controls[id]?.name ?? '')).map((s) => s.name)
+    return { el: doc.model.controls[id], steps, ...(meta ? { meta } : {}) }
+  }
   const el = (doc.model[COLLECTION[kind]] as Record<string, unknown>)[id]
   if (kind === 'component' || kind === 'data' || kind === 'channel') {
     // Keep the plain element fingerprint until properties are set, so earlier approvals stay valid.

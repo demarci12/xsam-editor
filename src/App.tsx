@@ -8,7 +8,7 @@ import { reviewState } from './components/common'
 import { Inspector } from './components/Inspector'
 import { DocContext, UIContext, type Selection, type Theme, type UI, type View } from './context'
 import type { Root } from './graph'
-import { useDoc, type DocState } from './store'
+import { migrateDoc, useDoc, type DocState } from './store'
 import { computeRisks } from './tara/risk'
 import { emptyExtras } from './tara/types'
 import { Dashboard, ReviewView, SettingsView } from './views/Overview'
@@ -115,10 +115,15 @@ export default function App() {
       if (fileName.endsWith('.json')) {
         const p = JSON.parse(text)
         if (p.format !== PROJECT_FORMAT) throw new Error('Not a TARA project file')
-        doc.replaceDoc({ model: p.model, extras: { ...emptyExtras(), ...p.extras }, originalXml: p.originalXml, fileName: p.fileName })
+        doc.replaceDoc(migrateDoc({ model: p.model, extras: p.extras, originalXml: p.originalXml, fileName: p.fileName }))
       } else {
         const model = parseXsam(text)
-        doc.replaceDoc({ model, extras: emptyExtras(), originalXml: text, fileName })
+        // A new version of the same MPS model: keep review, treatment, goals and properties
+        // (they are keyed by stable MPS ids); approvals of changed elements show as "Changed".
+        const hasWork = Object.keys(doc.extras.reviews).length + Object.keys(doc.extras.treatments).length + Object.keys(doc.extras.goals).length + Object.keys(doc.extras.assetProperties ?? {}).length > 0
+        const sameModel = !!model.modelRef && model.modelRef === doc.model.modelRef
+        const keep = sameModel && hasWork && confirm(`${fileName} is a version of the open model (${model.projectName}). Keep your review, treatment, goals and security properties?`)
+        doc.replaceDoc({ model, extras: keep ? doc.extras : emptyExtras(), originalXml: text, fileName })
       }
       setRoot(null)
       select(null)

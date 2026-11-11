@@ -1,7 +1,7 @@
 // TARA data that XSAM files from this model don't carry yet (treatment, goals, claims,
 // controls, review). Stored in the project file next to the .xsam.
 
-import type { Category, ElementKind, FeasibilityLevel, ImpactLevel } from '../xsam/types'
+import type { ElementKind, FeasibilityLevel, ImpactLevel } from '../xsam/types'
 
 export type TreatmentDecision = 'Avoid' | 'Reduce' | 'Share' | 'Retain'
 export const TREATMENTS: TreatmentDecision[] = ['Reduce', 'Avoid', 'Share', 'Retain']
@@ -29,19 +29,15 @@ export interface Claim {
   description: string
 }
 
-/** A control raises the attack potential of the steps it mitigates (residual risk). */
-export interface Control {
-  id: string
-  name: string
-  title: string
-  description: string
-  /** Attack step names this control applies to. */
-  stepNames: string[]
-  /** Minimum factor values an attacker faces once the control is in place. */
-  floors: Partial<Record<Category, number>>
-  goalIds: string[]
+/**
+ * TARA data about an XSAM security control that the .xsam has no place for.
+ * The control itself (name, effect, mitigated steps) lives in the .xsam.
+ */
+export interface ControlMeta {
   status: 'Planned' | 'Implemented' | 'Verified'
+  goalIds: string[]
 }
+export const DEFAULT_CONTROL_META: ControlMeta = { status: 'Implemented', goalIds: [] }
 
 export type ReviewStatus = 'Open' | 'In review' | 'Rework' | 'Approved'
 export const REVIEW_STATUSES: ReviewStatus[] = ['Open', 'In review', 'Rework', 'Approved']
@@ -64,7 +60,7 @@ export interface ReviewRecord {
   approvedHash?: string
 }
 
-export type ReviewKind = ElementKind | 'risk' | 'goal' | 'control'
+export type ReviewKind = ElementKind | 'risk' | 'goal'
 
 /** Review key: `${kind}:${id}`. */
 export type ReviewKey = string
@@ -99,7 +95,7 @@ export interface TaraExtras {
   treatments: Record<string, Treatment>
   goals: Record<string, Goal>
   claims: Record<string, Claim>
-  controls: Record<string, Control>
+  controlMeta: Record<string, ControlMeta>
   reviews: Record<ReviewKey, ReviewRecord>
   settings: TaraSettings
 }
@@ -109,7 +105,7 @@ export const emptyExtras = (): TaraExtras => ({
   treatments: {},
   goals: {},
   claims: {},
-  controls: {},
+  controlMeta: {},
   reviews: {},
   settings: { reviewer: '', riskMatrix: DEFAULT_RISK_MATRIX, acceptThreshold: 3 },
 })
@@ -144,8 +140,9 @@ export const CHECKLISTS: Record<ReviewKind, { id: string; text: string }[]> = {
     { id: 'cal', text: 'CAL assigned where required' },
   ],
   control: [
-    { id: 'effect', text: 'Effect on feasibility (floors) is justified' },
-    { id: 'steps', text: 'Applied to the right attack steps' },
+    { id: 'effect', text: 'Effect is justified (removes the path, or the attack potential needed to bypass it)' },
+    { id: 'steps', text: 'Mitigates the right attack steps' },
+    { id: 'variant', text: 'Assumed variant confirmed against the product' },
   ],
   component: [
     { id: 'desc', text: 'Component and its boundary are described' },

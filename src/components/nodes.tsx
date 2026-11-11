@@ -1,5 +1,6 @@
 import { Handle, Position, type NodeProps } from '@xyflow/react'
 import { useDocCtx, useUI } from '../context'
+import { formatExpr, refsOf } from '../xsam/expr'
 import type { FlowNode, GateNodeData, ScenarioNodeData, StepNodeData } from '../graph'
 import { LevelBadge, levelClass, VectorChips } from './Level'
 
@@ -28,6 +29,11 @@ export function StepNode({ data, selected }: NodeProps<FlowNode>) {
       </div>
       <div className="node-foot">
         {d.step?.refinedBy ? <span className="muted">refined</span> : <VectorChips vector={d.evaluation?.vector ?? null} />}
+        {d.step?.mitigatedBy ? (
+          <span className="shield" title={`Mitigated by ${formatExpr(d.step.mitigatedBy)}`}>
+            🛡 {refsOf(d.step.mitigatedBy).join(' ')}
+          </span>
+        ) : null}
         {d.expandable && !d.isRoot ? (
           <button
             className="mini nodrag"

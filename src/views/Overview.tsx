@@ -31,7 +31,7 @@ function useReviewItems() {
       ...Object.values(m.threatScenarios).map((x) => ({ kind: 'risk' as const, id: x.id, name: x.name, title: `Risk: ${x.title}` })),
       ...Object.values(m.steps).map((x) => ({ kind: 'step' as const, id: x.id, name: x.name, title: x.title })),
       ...Object.values(doc.extras.goals).map((x) => ({ kind: 'goal' as const, id: x.id, name: x.name, title: x.title })),
-      ...Object.values(doc.extras.controls).map((x) => ({ kind: 'control' as const, id: x.id, name: x.name, title: x.title })),
+      ...Object.values(m.controls).map((x) => ({ kind: 'control' as const, id: x.id, name: x.name, title: x.title })),
       ...Object.values(m.components).map((x) => ({ kind: 'component' as const, id: x.id, name: x.name, title: x.title })),
       ...Object.values(m.data).map((x) => ({ kind: 'data' as const, id: x.id, name: x.name, title: x.title })),
       ...Object.values(m.channels).map((x) => ({ kind: 'channel' as const, id: x.id, name: x.name, title: x.title })),
@@ -52,6 +52,8 @@ export function Dashboard() {
   const noTree = risks.filter((r) => !r.ts.threatenedBy && r.feasibilitySource !== 'explicit')
   const noDs = Object.values(m.threatScenarios).filter((t) => !t.damageScenarioIds.length)
   const unratedDs = Object.values(m.damageScenarios).filter((d) => !impactLevelOf(d))
+  // Stored impactLevel in the imported file that doesn't match that file's own ratings.
+  const staleImpact = Object.values(doc.baseline?.damageScenarios ?? {}).filter((d) => (d.storedImpactLevel ?? null) !== impactLevelOf(d))
   const undecidedProps = useMemo(() => {
     let n = 0
     for (const [key, pm] of propertyUsage(doc)) for (const p of pm.keys()) if (doc.extras.assetProperties?.[key]?.[p] === undefined) n++
@@ -79,7 +81,7 @@ export function Dashboard() {
         {stat('Damage scenarios', Object.keys(m.damageScenarios).length, 'damage', unratedDs.length ? `${unratedDs.length} without impact` : undefined)}
         {stat('Threat scenarios', Object.keys(m.threatScenarios).length, 'threat')}
         {stat('Attack steps', Object.keys(m.steps).length, 'steps')}
-        {stat('Goals · controls', `${Object.keys(doc.extras.goals).length} · ${Object.keys(doc.extras.controls).length}`, 'concept')}
+        {stat('Goals · controls', `${Object.keys(doc.extras.goals).length} · ${Object.keys(m.controls).length}`, 'concept')}
         {stat('Reviewed', `${Math.round((approved / Math.max(1, items.length)) * 100)}%`, 'review', `${approved}/${items.length} approved`)}
       </div>
 
@@ -132,6 +134,15 @@ export function Dashboard() {
                 <b>{untreated.length}</b> risks at R{th}+ have no treatment decision. <a onClick={() => setView('risks')}>Treat</a>
               </li>
             ) : null}
+            {staleImpact.length ? (
+              <li className="warn">
+                <b>{staleImpact.length}</b> damage scenarios have a stored impact level that doesn't match their ratings in the file ({staleImpact
+                  .slice(0, 3)
+                  .map((d) => `${d.name}: stored ${d.storedImpactLevel ?? 'none'}, rated ${impactLevelOf(d)}`)
+                  .join('; ')}
+                {staleImpact.length > 3 ? '…' : ''}). The tool uses the ratings; let MPS recompute. <a onClick={() => setView('damage')}>Show</a>
+              </li>
+            ) : null}
             {undecidedProps ? (
               <li>
                 <b>{undecidedProps}</b> asset security properties are used by damage scenarios but not yet decided in the item definition. <a onClick={() => setView('item')}>Decide</a>
@@ -140,7 +151,7 @@ export function Dashboard() {
             {noTree.length ? <li><b>{noTree.length}</b> threat scenarios have no attack tree.</li> : null}
             {noDs.length ? <li><b>{noDs.length}</b> threat scenarios are not linked to a damage scenario.</li> : null}
             {unratedDs.length ? <li><b>{unratedDs.length}</b> damage scenarios have no impact rating (out of scope?).</li> : null}
-            {!stale.length && !untreated.length && !undecidedProps && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
+            {!stale.length && !staleImpact.length && !untreated.length && !undecidedProps && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
           </ul>
         </div>
         <div className="card">

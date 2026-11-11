@@ -24,7 +24,7 @@ Everything stays in the browser: it autosaves to IndexedDB, and nothing is uploa
 | Risk determination: impact × feasibility through a configurable risk matrix (Annex H default) | Risks & treatment | computed |
 | Risk treatment: Reduce/Avoid/Share/Retain, rationale, goals, claims | Risks & treatment | project file |
 | Cybersecurity goals (with CAL) and claims | Goals & claims | project file |
-| Controls: per-factor minimum attack potential on mitigated steps → residual risk | Controls | project file |
+| Security controls (XSAM `Control`, `mitigatedBy` on attack steps) → residual risk | Controls | `.xsam` (status, goals: project file) |
 | Review: status, checklist per element type, comments, approval (reopens on edit) | every detail panel, Review | project file |
 | UN R155 Annex 5 checklist: relevant / not relevant + rationale | UN R155 checklist | `.xsam` |
 
@@ -47,6 +47,19 @@ Everything stays in the browser: it autosaves to IndexedDB, and nothing is uploa
   every stored level.
 - Threat scenario risk uses the worst linked damage scenario and the attack tree's feasibility.
   Explicit levels set in MPS take precedence.
+- Residual risk applies every control that isn't marked Planned. A step whose `mitigatedBy`
+  holds (several controls combine with AND) either has its path removed (the control has no
+  rating, XSAM `RemoveAllDamage`) or needs at least the control's rated attack potential to bypass.
+  An AND branch through a removed step fails, and an OR takes the next branch. If every path is
+  removed, the residual risk is R1.
+
+**v12:** 8 damage scenarios (DS.EBS.3.1–3.8) received impact ratings without an updated
+`impactLevel`, and DS.X.2 is rated P1 but still stored as Neg. The tool shows this on the
+dashboard and uses the ratings.
+
+**Opening a newer version** of the same MPS model (same `modelRef`) offers to keep review,
+treatment, goals and security properties. They're keyed by MPS ids, and approvals of elements
+that changed show as "Changed".
 
 **Known data finding:** in `private model v10`, the 23 `AS.TS.*` root steps are stored as "High",
 but their own trees compute Low or Medium. For example, `AS.TS.5 = ASC.UDS.012`, and

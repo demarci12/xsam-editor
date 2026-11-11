@@ -11,6 +11,8 @@ export interface Evaluation {
   unresolved: string[]
   /** Steps that make up the cheapest path (OR picks its cheapest child). */
   pathSteps: Set<string>
+  /** Every path is cut by a control that removes the damage (residual analysis). */
+  blocked: boolean
 }
 
 const ZERO: Vector = { Knowledge: 0, Opportunity: 0, Expertise: 0, Equipment: 0, Time: 0 }
@@ -40,12 +42,17 @@ export function ownVector(step: AttackStep): Vector | null {
  * OR: attacker takes the easiest child (lowest total attack potential).
  * Own ratings on a refined step are combined like an extra AND child.
  */
+type Res = { vector: Vector | null; path: Set<string>; unresolved: string[]; blocked: boolean }
+
 export class FeasibilityEngine {
   private byName = new Map<string, AttackStep>()
-  private cache = new Map<string, { vector: Vector | null; path: Set<string>; unresolved: string[] }>()
+  private cache = new Map<string, Res>()
+  private blockedSteps: Set<string>
 
-  constructor(steps: Iterable<AttackStep>) {
+  /** `blocked`: steps cut off by a control (residual analysis); a blocked step can't be used by the attacker. */
+  constructor(steps: Iterable<AttackStep>, blocked: Iterable<string> = []) {
     for (const s of steps) this.byName.set(s.name, s)
+    this.blockedSteps = new Set(blocked)
   }
 
   step(name: string) {
@@ -56,20 +63,21 @@ export class FeasibilityEngine {
     const r = this.evalStep(name, new Set())
     const total = r.vector ? sum(r.vector) : null
     return {
-      vector: r.vector,
-      total,
-      level: total === null ? null : levelOf(total),
+      vector: r.blocked ? null : r.vector,
+      total: r.blocked ? null : total,
+      level: r.blocked || total === null ? null : levelOf(total),
       unresolved: [...new Set(r.unresolved)],
       pathSteps: r.path,
+      blocked: r.blocked,
     }
   }
 
   /** Evaluate an arbitrary expression, e.g. a threat scenario's attack paths. */
   evaluateExpr(e: Expr | null): Evaluation {
-    if (!e) return { vector: null, total: null, level: null, unresolved: [], pathSteps: new Set() }
+    if (!e) return { vector: null, total: null, level: null, unresolved: [], pathSteps: new Set(), blocked: false }
     const r = this.evalExpr(e, new Set())
-    const total = r.vector ? sum(r.vector) : null
-    return { vector: r.vector, total, level: total === null ? null : levelOf(total), unresolved: [...new Set(r.unresolved)], pathSteps: r.path }
+    const total = r.vector && !r.blocked ? sum(r.vector) : null
+    return { vector: r.blocked ? null : r.vector, total, level: total === null ? null : levelOf(total), unresolved: [...new Set(r.unresolved)], pathSteps: r.path, blocked: r.blocked }
   }
 
   /**
@@ -116,42 +124,48 @@ export class FeasibilityEngine {
     const cached = this.cache.get(name)
     if (cached) return cached
     const step = this.byName.get(name)
-    if (!step) return { vector: null, path: new Set<string>(), unresolved: [name] }
-    if (visiting.has(name)) return { vector: null, path: new Set<string>(), unresolved: [] }
+    if (!step) return { vector: null, path: new Set<string>(), unresolved: [name], blocked: false }
+    if (this.blockedSteps.has(name)) return { vector: null, path: new Set<string>(), unresolved: [], blocked: true }
+    if (visiting.has(name)) return { vector: null, path: new Set<string>(), unresolved: [], blocked: false }
     visiting.add(name)
     const own = ownVector(step)
-    let result: { vector: Vector | null; path: Set<string>; unresolved: string[] }
+    let result: Res
     if (step.refinedBy) {
       const r = this.evalExpr(step.refinedBy, visiting)
       const vector = own && r.vector ? maxV(own, r.vector) : (r.vector ?? own)
-      result = { vector, path: new Set([name, ...r.path]), unresolved: r.unresolved }
+      result = { vector: r.blocked ? null : vector, path: new Set([name, ...r.path]), unresolved: r.unresolved, blocked: r.blocked }
     } else {
-      result = { vector: own, path: new Set([name]), unresolved: [] }
+      result = { vector: own, path: new Set([name]), unresolved: [], blocked: false }
     }
     visiting.delete(name)
     this.cache.set(name, result)
     return result
   }
 
-  private evalExpr(e: Expr, visiting: Set<string>): { vector: Vector | null; path: Set<string>; unresolved: string[] } {
+  private evalExpr(e: Expr, visiting: Set<string>): Res {
     if (e.kind === 'ref') return this.evalStep(e.name, visiting)
     const parts = e.children.map((c) => this.evalExpr(c, visiting))
     const unresolved = parts.flatMap((p) => p.unresolved)
     if (e.kind === 'and') {
+      // One blocked condition blocks the whole AND.
+      if (parts.some((p) => p.blocked)) return { vector: null, path: new Set(), unresolved, blocked: true }
       let v: Vector | null = null
       const path = new Set<string>()
       for (const p of parts) {
         if (p.vector) v = v ? maxV(v, p.vector) : p.vector
         p.path.forEach((x) => path.add(x))
       }
-      return { vector: v, path, unresolved }
+      return { vector: v, path, unresolved, blocked: false }
     }
+    // OR: the attacker takes the easiest branch that isn't blocked.
+    const open = parts.filter((p) => !p.blocked)
+    if (parts.length && !open.length) return { vector: null, path: new Set(), unresolved, blocked: true }
     let best: (typeof parts)[number] | null = null
-    for (const p of parts) {
+    for (const p of open) {
       if (!p.vector) continue
       if (!best || sum(p.vector) < sum(best.vector!)) best = p
     }
-    return { vector: best?.vector ?? null, path: best?.path ?? new Set(), unresolved }
+    return { vector: best?.vector ?? null, path: best?.path ?? new Set(), unresolved, blocked: false }
   }
 }
 

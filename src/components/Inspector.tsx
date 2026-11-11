@@ -2,8 +2,8 @@ import { useMemo, useState } from 'react'
 import { useDocCtx, useUI } from '../context'
 import type { Owner } from '../store'
 import { computeRisks } from '../tara/risk'
-import { TREATMENTS, type TreatmentDecision } from '../tara/types'
-import { getAt, refsOf, type ExprPath } from '../xsam/expr'
+import { DEFAULT_CONTROL_META, TREATMENTS, type TreatmentDecision } from '../tara/types'
+import { formatExpr, getAt, refsOf, type ExprPath } from '../xsam/expr'
 import { newMpsId } from '../xsam/io'
 import { impactIndex, impactLevelOf, learnScales } from '../xsam/impact'
 import {
@@ -22,6 +22,7 @@ import {
   type DamageScenario,
   type DataElement,
   type Expr,
+  type SecurityControl,
   type ThreatScenario,
   type ToeeRef,
 } from '../xsam/types'
@@ -78,7 +79,7 @@ export function Inspector({ onClose }: { onClose?: () => void }) {
           body = x.claims[id] && <ClaimPanel id={id} />
           break
         case 'control':
-          body = x.controls[id] && <ControlPanel id={id} />
+          body = m.controls[id] && <ControlPanel id={id} />
           break
       }
     }
@@ -193,7 +194,9 @@ function StepPanel({ step }: { step: AttackStep }) {
     ],
     [doc.model, step.name],
   )
-  const controls = Object.values(doc.extras.controls).filter((c) => c.stepNames.includes(step.name))
+  const controlOpts = useMemo(() => Object.values(doc.model.controls).map((c) => ({ id: c.name, label: c.name, sub: c.title })), [doc.model.controls])
+  const controlByName = useMemo(() => new Map(Object.values(doc.model.controls).map((c) => [c.name, c])), [doc.model.controls])
+  const mitigatedBy = refsOf(step.mitigatedBy)
   const upd = (p: Partial<AttackStep>) => doc.actions.update('step', step.id, p)
   // Stored level in the imported file vs. what that file's own tree computes.
   const importedLevel = doc.baseline?.steps[step.id] ? doc.baselineEngine?.evaluate(step.name).level : null
@@ -267,19 +270,26 @@ function StepPanel({ step }: { step: AttackStep }) {
         <ToeePicker value={step.actedOn} onChange={(v) => upd({ actedOn: v })} />
       </Section>
 
-      {controls.length ? (
-        <Section title="Controls">
-          <ul className="links">
-            {controls.map((c) => (
-              <li key={c.id}>
-                <a onClick={() => select({ kind: 'control', id: c.id })}>
-                  <code>{c.name}</code> {c.title}
-                </a>
-              </li>
-            ))}
-          </ul>
-        </Section>
-      ) : null}
+      <Section title="Mitigated by (security controls)">
+        <MultiPicker
+          options={controlOpts}
+          value={mitigatedBy}
+          onChange={(v) => {
+            for (const n of mitigatedBy) if (!v.includes(n)) doc.actions.setMitigation(step.id, n, false)
+            for (const n of v) if (!mitigatedBy.includes(n)) doc.actions.setMitigation(step.id, n, true)
+          }}
+          placeholder="control"
+          render={(n) => {
+            const c = controlByName.get(n)
+            return (
+              <a className={c ? '' : 'ext'} title={c?.title ?? 'not in model'} onClick={() => c && select({ kind: 'control', id: c.id })}>
+                🛡 {n}
+              </a>
+            )
+          }}
+        />
+        {step.mitigatedBy && step.mitigatedBy.kind !== 'ref' ? <p className="muted small">In XSAM: <code>{formatExpr(step.mitigatedBy)}</code></p> : null}
+      </Section>
 
       {usedBy.length ? (
         <Section title="Used by">
@@ -648,7 +658,8 @@ function RiskPanel({ t }: { t: ThreatScenario }) {
         </span>
         <span>Residual</span>
         <span>
-          <LevelBadge level={risk.residualFeasibility} /> <RiskBadge value={risk.residualRisk} title="Residual risk with controls applied" />
+          {risk.residualBlocked ? <span className="small">🛡 all attack paths removed by controls</span> : <LevelBadge level={risk.residualFeasibility} />}{' '}
+          <RiskBadge value={risk.residualRisk} title="Residual risk with controls applied" />
         </span>
       </div>
 
@@ -719,7 +730,7 @@ function GoalPanel({ id }: { id: string }) {
   const g = doc.extras.goals[id]
   const upd = (p: Parameters<typeof doc.actions.updateGoal>[1]) => doc.actions.updateGoal(id, p)
   const threats = Object.entries(doc.extras.treatments).filter(([, t]) => t.goalIds.includes(id)).map(([k]) => doc.model.threatScenarios[k]).filter(Boolean)
-  const controls = Object.values(doc.extras.controls).filter((c) => c.goalIds.includes(id))
+  const controls = Object.values(doc.model.controls).filter((c) => doc.extras.controlMeta?.[c.id]?.goalIds.includes(id))
   return (
     <div className="panel">
       <Head kind="Cybersecurity goal" name={g.name} />
@@ -798,25 +809,48 @@ function ClaimPanel({ id }: { id: string }) {
 function ControlPanel({ id }: { id: string }) {
   const doc = useDocCtx()
   const { select } = useUI()
-  const c = doc.extras.controls[id]
-  const upd = (p: Parameters<typeof doc.actions.updateControl>[1]) => doc.actions.updateControl(id, p)
-  const stepOpts = useMemo(() => Object.values(doc.model.steps).map((s) => ({ id: s.name, label: s.name, sub: s.title })), [doc.model.steps])
+  const c = doc.model.controls[id]
+  const meta = { ...DEFAULT_CONTROL_META, ...(doc.extras.controlMeta?.[id] ?? {}) }
+  const upd = (p: Partial<SecurityControl>) => doc.actions.update('control', id, p)
+  const stepOpts = useMemo(() => Object.values(doc.model.steps).map((s) => ({ id: s.id, label: s.name, sub: s.title })), [doc.model.steps])
+  const mitigated = Object.values(doc.model.steps).filter((s) => refsOf(s.mitigatedBy).includes(c.name))
   const goalOpts = Object.values(doc.extras.goals).map((g) => ({ id: g.id, label: g.name, sub: g.title }))
+  const rated = CATEGORIES.some((k) => c.ratings[k])
+  const removes = c.effects.includes('RemoveAllDamage')
+  const risksAffected = useMemo(() => {
+    const names = new Set(mitigated.map((s) => s.name))
+    // Any step anywhere in the tree (mitigations usually sit on refined, intermediate steps).
+    const inTree = (e: Expr | null, seen = new Set<string>()): boolean =>
+      refsOf(e).some((n) => {
+        if (names.has(n)) return true
+        if (seen.has(n)) return false
+        seen.add(n)
+        return inTree(doc.stepByName.get(n)?.refinedBy ?? null, seen)
+      })
+    return Object.values(doc.model.threatScenarios).filter((t) => inTree(t.threatenedBy))
+  }, [doc.model.threatScenarios, doc.stepByName, mitigated])
   return (
     <div className="panel">
-      <Head kind="Control" name={c.name} />
-      <Field label="ID" value={c.name} onChange={(v) => upd({ name: v })} />
+      <Head kind="Security control" name={c.name} right={<EditedMark kind="control" id={c.id} />} />
+      <NameField value={c.name} taken={(n) => Object.values(doc.model.controls).some((x) => x.name === n)} onCommit={(n) => upd({ name: n })} />
       <Field label="Title" value={c.title} onChange={(v) => upd({ title: v })} />
       <Field label="Description" multiline value={c.description} onChange={(v) => upd({ description: v })} />
+      {c.classRef ? <p className="muted small">Catalog class: <code>{c.classRef.replace(/^mps\/r:[^(]*/, '')}</code></p> : null}
       <label className="field">
-        <span>Status</span>
-        <select value={c.status} onChange={(e) => upd({ status: e.target.value as typeof c.status })}>
+        <span>Status (counts for residual risk unless Planned)</span>
+        <select value={meta.status} onChange={(e) => doc.actions.setControlMeta(id, { status: e.target.value as typeof meta.status })}>
           {['Planned', 'Implemented', 'Verified'].map((s) => (
             <option key={s}>{s}</option>
           ))}
         </select>
       </label>
-      <Section title="Effect: minimum attack potential with this control">
+
+      <Section title="Effect">
+        <label className="check">
+          <input type="checkbox" checked={removes} onChange={(e) => upd({ effects: e.target.checked ? [...c.effects.filter((x) => x !== 'RemoveAllDamage'), 'RemoveAllDamage'] : c.effects.filter((x) => x !== 'RemoveAllDamage') })} />
+          <span>Removes all damage (XSAM <code>RemoveAllDamage</code>)</span>
+        </label>
+        <p className="muted small">Attack potential to bypass the control (optional). If set, residual risk raises the mitigated steps to at least these values; if empty, the mitigated steps are removed from the attack paths.</p>
         <div className="floors">
           {CATEGORIES.map((cat) => (
             <label key={cat} title={CATEGORY_LABEL[cat]}>
@@ -825,32 +859,57 @@ function ControlPanel({ id }: { id: string }) {
                 type="number"
                 min={0}
                 placeholder="–"
-                value={c.floors[cat] ?? ''}
+                value={c.ratings[cat]?.value ?? ''}
                 onChange={(e) => {
-                  const floors = { ...c.floors }
-                  if (e.target.value === '') delete floors[cat]
-                  else floors[cat] = Math.max(0, Number(e.target.value))
-                  upd({ floors })
+                  const ratings = { ...c.ratings }
+                  if (e.target.value === '') delete ratings[cat]
+                  else ratings[cat] = { ...ratings[cat], value: Math.max(0, Number(e.target.value)) }
+                  upd({ ratings })
                 }}
               />
             </label>
           ))}
         </div>
-        <p className="muted small">On every mitigated step, each factor is raised to at least this value; residual risk is recomputed.</p>
+        <p className="small">{rated ? 'Residual: bypass needs this attack potential.' : 'Residual: mitigated steps are cut off.'}</p>
       </Section>
-      <Section title={`Mitigated attack steps (${c.stepNames.length})`}>
-        <MultiPicker options={stepOpts} value={c.stepNames} onChange={(v) => upd({ stepNames: v })} placeholder="attack step" render={(n) => <a onClick={() => { const s = doc.stepByName.get(n); if (s) select({ kind: 'step', id: s.id }) }}>{n}</a>} />
+
+      <Section title={`Mitigates attack steps (${mitigated.length})`}>
+        <MultiPicker
+          options={stepOpts}
+          value={mitigated.map((s) => s.id)}
+          onChange={(v) => {
+            for (const s of mitigated) if (!v.includes(s.id)) doc.actions.setMitigation(s.id, c.name, false)
+            for (const sid of v) if (!mitigated.some((s) => s.id === sid)) doc.actions.setMitigation(sid, c.name, true)
+          }}
+          placeholder="attack step"
+          render={(sid) => <a onClick={() => select({ kind: 'step', id: sid })}>{doc.model.steps[sid]?.name}</a>}
+        />
+        <p className="muted small">Stored on each step as <code>mitigatedBy</code>; several controls on one step are combined with AND.</p>
+      </Section>
+
+      <Section title={`Threat scenarios affected (${risksAffected.length})`}>
+        <div className="path-steps">
+          {risksAffected.map((t) => (
+            <a key={t.id} title={t.title} onClick={() => select({ kind: 'risk', id: t.id })}>
+              {t.name}
+            </a>
+          ))}
+        </div>
+      </Section>
+
+      <Section title="Acts on">
+        <ToeePicker value={c.actedOn} onChange={(v) => upd({ actedOn: v })} />
       </Section>
       <Section title="Fulfils goals">
-        <MultiPicker options={goalOpts} value={c.goalIds} onChange={(v) => upd({ goalIds: v })} placeholder="goal" render={(gid) => <a onClick={() => select({ kind: 'goal', id: gid })}>{doc.extras.goals[gid]?.name}</a>} />
+        <MultiPicker options={goalOpts} value={meta.goalIds} onChange={(v) => doc.actions.setControlMeta(id, { goalIds: v })} placeholder="goal" render={(gid) => <a onClick={() => select({ kind: 'goal', id: gid })}>{doc.extras.goals[gid]?.name}</a>} />
       </Section>
       <ReviewBox kind="control" id={id} />
       <Danger
         label="Delete control"
         onClick={() => {
-          if (!confirm(`Delete ${c.name}?`)) return
+          if (!confirm(`Delete ${c.name}? It is removed from ${mitigated.length} attack step(s).`)) return
           select(null)
-          doc.actions.removeControl(id)
+          doc.actions.remove('control', id)
         }}
       />
     </div>

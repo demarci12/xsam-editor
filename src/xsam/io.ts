@@ -18,6 +18,7 @@ import {
   type ImpactEntry,
   type QualifiedAsset,
   type Rating,
+  type SecurityControl,
   type ThreatScenario,
   type ToeeRef,
   type XsamModel,
@@ -69,6 +70,18 @@ function parseToees(container: Element | undefined, modelRef: string | null): To
 function parseOption(option: string | null): number | null {
   const m = /\((-?\d+)\)\s*$/.exec(option ?? '')
   return m ? Number(m[1]) : null
+}
+
+function parseRatings(el: Element): Partial<Record<Category, Rating>> {
+  const ratings: Partial<Record<Category, Rating>> = {}
+  for (const r of kids(kid(el, 'InitialFeasibilityOptions'), 'FeasibilityRating')) {
+    const cat = lastSeg(attr(r, 'category')) as Category
+    const value = parseOption(r.getAttribute('option'))
+    if (!CATEGORIES.includes(cat) || value === null) continue
+    const rationale = r.getAttribute('rationale') ?? undefined
+    ratings[cat] = rationale ? { value, rationale } : { value }
+  }
+  return ratings
 }
 
 export function parseXsam(xml: string): XsamModel {
@@ -123,18 +136,11 @@ export function parseXsam(xml: string): XsamModel {
       const base = { id, name: attr(el, 'name'), title: attr(el, 'title'), description: attr(el, 'description'), chunkId: chunk.id }
       switch (el.localName) {
         case 'AttackStep': {
-          const ratings: Partial<Record<Category, Rating>> = {}
-          for (const r of kids(kid(el, 'InitialFeasibilityOptions'), 'FeasibilityRating')) {
-            const cat = lastSeg(attr(r, 'category')) as Category
-            const value = parseOption(r.getAttribute('option'))
-            if (!CATEGORIES.includes(cat) || value === null) continue
-            const rationale = r.getAttribute('rationale') ?? undefined
-            ratings[cat] = rationale ? { value, rationale } : { value }
-          }
           const s: AttackStep = {
             ...base,
-            ratings,
+            ratings: parseRatings(el),
             refinedBy: parseExpr(el.getAttribute('refinedBy')),
+            mitigatedBy: parseExpr(el.getAttribute('mitigatedBy')),
             actedOn: parseToees(kid(el, 'ActedOnTOEEs'), ref),
             storedLevel: el.getAttribute('attackFeasibilityLevel') ?? undefined,
           }
@@ -179,6 +185,17 @@ export function parseXsam(xml: string): XsamModel {
           m.threatScenarios[id] = t
           break
         }
+        case 'Control': {
+          const c: SecurityControl = {
+            ...base,
+            classRef: kid(kid(el, 'InstantiatedControlClass'), 'SecurityControlClassRef')?.getAttribute('target') ?? null,
+            effects: kids(kid(el, 'Effects')).map((e) => e.localName),
+            ratings: parseRatings(el),
+            actedOn: parseToees(kid(el, 'ActedOnTOEEs'), ref),
+          }
+          m.controls[id] = c
+          break
+        }
         case 'Component':
           parseComponent(el, chunk.id, null)
           break
@@ -210,6 +227,10 @@ const TEMPLATES: Record<string, string[]> = {
   Component: ['Technologies', 'StoredData', 'SubComponents', 'AssignedFunctions', 'Todos', 'TrustZone', 'PackageIdentifiers'],
   Data: ['SubData', 'AssignedFunctions', 'Todos', 'PackageIdentifiers'],
   Channel: ['Endpoints', 'Technologies', 'DataFlows', 'AssignedFunctions', 'Todos', 'PackageIdentifiers'],
+  Control: [
+    'InstantiatedControlClass', 'ControlGroups', 'InitialFeasibilityOptions', 'ConsecutiveFeasibilityOptions', 'ActedOnTOEEs', 'Effects',
+    'CustomImpactCombinator', 'CustomFeasibilityCombinator', 'FeasibilityModel',
+  ],
 }
 
 const EMPTY_XSAM = (modelRef: string) => `<?xml version="1.0" encoding="UTF-8" standalone="no"?>
@@ -294,6 +315,21 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
     setAttr(el, 'description', x.description)
   }
 
+  const writeRatings = (el: Element, ratings: Partial<Record<Category, Rating>>) => {
+    const opts = ensureKid(el, 'InitialFeasibilityOptions')
+    const byCat = new Map(kids(opts, 'FeasibilityRating').map((r) => [lastSeg(attr(r, 'category')), r]))
+    replaceKids(
+      opts,
+      CATEGORIES.filter((c) => ratings[c]).map((c) => {
+        const r = ratings[c]!
+        const rEl = byCat.get(c) ?? mk('FeasibilityRating', { category: `name/FeasibilityCategory/${c}`, 'mps:id': newMpsId() })
+        rEl.setAttribute('option', `name/FeasibilityOption/${CATEGORY_PREFIX[c]}${r.value}(${r.value})`)
+        setAttr(rEl, 'rationale', r.rationale || null)
+        return rEl
+      }),
+    )
+  }
+
   const writeStep = (s: AttackStep) => {
     const { el, fresh } = getEl('AttackStep', s.id)
     const level = engine.evaluate(s.name).level
@@ -305,6 +341,7 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
     if (!fresh && prev && same({ ...prev, chunkId: 0, storedLevel: 0 }, { ...s, chunkId: 0, storedLevel: 0 })) return el
     baseAttrs(el, s)
     setAttr(el, 'refinedBy', s.refinedBy ? formatExpr(s.refinedBy) : null)
+    setAttr(el, 'mitigatedBy', s.mitigatedBy ? formatExpr(s.mitigatedBy) : null)
     if (!level) el.removeAttribute('attackFeasibilityLevel')
     setAttr(
       el,
@@ -312,19 +349,26 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
       CATEGORIES.map((c) => `${c}:${s.ratings[c] ? `${CATEGORY_PREFIX[c]}${s.ratings[c]!.value}(${s.ratings[c]!.value})` : 'null'}`).join(', '),
     )
     if (fresh || !same(prev?.actedOn, s.actedOn)) replaceKids(ensureKid(el, 'ActedOnTOEEs'), toeeEls(s.actedOn))
-    if (fresh || !same(prev?.ratings, s.ratings)) {
-      const opts = ensureKid(el, 'InitialFeasibilityOptions')
-      const byCat = new Map(kids(opts, 'FeasibilityRating').map((r) => [lastSeg(attr(r, 'category')), r]))
-      replaceKids(
-        opts,
-        CATEGORIES.filter((c) => s.ratings[c]).map((c) => {
-          const r = s.ratings[c]!
-          const rEl = byCat.get(c) ?? mk('FeasibilityRating', { category: `name/FeasibilityCategory/${c}`, 'mps:id': newMpsId() })
-          rEl.setAttribute('option', `name/FeasibilityOption/${CATEGORY_PREFIX[c]}${r.value}(${r.value})`)
-          setAttr(rEl, 'rationale', r.rationale || null)
-          return rEl
-        }),
-      )
+    if (fresh || !same(prev?.ratings, s.ratings)) writeRatings(el, s.ratings)
+    return el
+  }
+
+  const writeControl = (c: SecurityControl) => {
+    const { el, fresh } = getEl('Control', c.id)
+    const prev = baseline.controls[c.id]
+    if (!fresh && prev && same({ ...prev, chunkId: 0 }, { ...c, chunkId: 0 })) return el
+    baseAttrs(el, c)
+    if (fresh || !same(prev?.ratings, c.ratings)) writeRatings(el, c.ratings)
+    if (fresh || !same(prev?.actedOn, c.actedOn)) replaceKids(ensureKid(el, 'ActedOnTOEEs'), toeeEls(c.actedOn))
+    if (fresh || !same(prev?.effects, c.effects)) {
+      const box = ensureKid(el, 'Effects')
+      const old = new Map(kids(box).map((e) => [e.localName, e]))
+      replaceKids(box, c.effects.map((name) => old.get(name) ?? mk(name, { 'mps:id': newMpsId() })))
+    }
+    if (c.classRef) {
+      const box = ensureKid(el, 'InstantiatedControlClass')
+      const r = kid(box, 'SecurityControlClassRef') ?? box.appendChild(mk('SecurityControlClassRef', { 'mps:id': newMpsId() }))
+      setAttr(r, 'target', c.classRef)
     }
     return el
   }
@@ -450,6 +494,7 @@ export function serializeXsam(model: XsamModel, originalXml: string | null): str
       else if (model.components[id]) wanted.push(writeComponent(model.components[id]))
       else if (model.data[id]) wanted.push(writeData(model.data[id]))
       else if (model.channels[id]) wanted.push(writeChannel(model.channels[id]))
+      else if (model.controls[id]) wanted.push(writeControl(model.controls[id]))
     }
     // Keep unmodelled elements first in their original order, then the modelled ones in model order.
     const current = kids(elements)
