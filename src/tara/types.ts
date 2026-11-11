@@ -86,7 +86,16 @@ export interface TaraSettings {
   acceptThreshold: number
 }
 
+/** Security property decision for one asset (item definition). */
+export interface AssetProperty {
+  relevant: boolean
+  rationale: string
+}
+/** Key: `${kind}:${id}` of a data / component / channel. */
+export type AssetProperties = Record<string, Partial<Record<string, AssetProperty>>>
+
 export interface TaraExtras {
+  assetProperties: AssetProperties
   treatments: Record<string, Treatment>
   goals: Record<string, Goal>
   claims: Record<string, Claim>
@@ -96,6 +105,7 @@ export interface TaraExtras {
 }
 
 export const emptyExtras = (): TaraExtras => ({
+  assetProperties: {},
   treatments: {},
   goals: {},
   claims: {},
@@ -137,7 +147,16 @@ export const CHECKLISTS: Record<ReviewKind, { id: string; text: string }[]> = {
     { id: 'effect', text: 'Effect on feasibility (floors) is justified' },
     { id: 'steps', text: 'Applied to the right attack steps' },
   ],
-  component: [{ id: 'desc', text: 'Component and its boundary are described' }],
-  data: [{ id: 'desc', text: 'Data asset is described and stored where expected' }],
-  channel: [{ id: 'desc', text: 'Channel endpoints and technology are correct' }],
+  component: [
+    { id: 'desc', text: 'Component and its boundary are described' },
+    { id: 'props', text: 'Security properties decided, with rationale' },
+  ],
+  data: [
+    { id: 'desc', text: 'Data asset is described and stored where expected' },
+    { id: 'props', text: 'Security properties decided, with rationale' },
+  ],
+  channel: [
+    { id: 'desc', text: 'Channel endpoints and technology are correct' },
+    { id: 'props', text: 'Security properties decided, with rationale' },
+  ],
 }

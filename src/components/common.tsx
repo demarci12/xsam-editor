@@ -34,7 +34,13 @@ export function reviewTarget(doc: Doc, kind: ReviewKind, id: string): unknown {
   if (kind === 'risk') return { t: doc.extras.treatments[id], ts: doc.model.threatScenarios[id] }
   if (kind === 'goal') return doc.extras.goals[id]
   if (kind === 'control') return doc.extras.controls[id]
-  return (doc.model[COLLECTION[kind]] as Record<string, unknown>)[id]
+  const el = (doc.model[COLLECTION[kind]] as Record<string, unknown>)[id]
+  if (kind === 'component' || kind === 'data' || kind === 'channel') {
+    // Keep the plain element fingerprint until properties are set, so earlier approvals stay valid.
+    const props = doc.extras.assetProperties?.[`${kind}:${id}`]
+    return props && Object.keys(props).length ? { el, props } : el
+  }
+  return el
 }
 
 export function useReview(kind: ReviewKind, id: string): { key: string; record: ReviewRecord | undefined; stale: boolean; hash: string } {
@@ -143,4 +149,17 @@ export function EditedMark({ kind, id }: { kind: keyof typeof COLLECTION; id: st
   const doc = useDocCtx()
   const e = isEdited(doc, kind, id)
   return e ? <span className={`edited ${e}`} title={e === 'new' ? 'New since import' : 'Edited since import'}>{e === 'new' ? 'new' : '●'}</span> : null
+}
+
+/** How often each asset × security property is used by damage scenarios (concerned assets). */
+export function propertyUsage(doc: Doc): Map<string, Map<string, string[]>> {
+  const m = new Map<string, Map<string, string[]>>()
+  for (const d of Object.values(doc.model.damageScenarios))
+    for (const a of d.assets) {
+      const key = `${a.target.kind}:${a.target.id}`
+      const pm = m.get(key) ?? new Map<string, string[]>()
+      pm.set(a.property, [...(pm.get(a.property) ?? []), d.name])
+      m.set(key, pm)
+    }
+  return m
 }

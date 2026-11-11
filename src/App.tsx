@@ -6,7 +6,7 @@ import { Canvas } from './components/Canvas'
 import { Catalog } from './components/Catalog'
 import { reviewState } from './components/common'
 import { Inspector } from './components/Inspector'
-import { DocContext, UIContext, type Selection, type UI, type View } from './context'
+import { DocContext, UIContext, type Selection, type Theme, type UI, type View } from './context'
 import type { Root } from './graph'
 import { useDoc, type DocState } from './store'
 import { computeRisks } from './tara/risk'
@@ -50,6 +50,21 @@ export default function App() {
   const [root, setRoot] = useState<Root | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const fileRef = useRef<HTMLInputElement>(null)
+  const [theme, setTheme] = useState<Theme>(() => {
+    try {
+      return localStorage.getItem('tara-theme') === 'dark' ? 'dark' : 'light'
+    } catch {
+      return 'light'
+    }
+  })
+  useEffect(() => {
+    document.documentElement.dataset.theme = theme
+    try {
+      localStorage.setItem('tara-theme', theme)
+    } catch {
+      /* per-viewer convenience only */
+    }
+  }, [theme])
 
   useEffect(() => {
     history.replaceState(null, '', `#${view}`)
@@ -57,6 +72,7 @@ export default function App() {
 
   const ui: UI = useMemo(
     () => ({
+      theme,
       view,
       setView,
       selection,
@@ -76,7 +92,7 @@ export default function App() {
           return x
         }),
     }),
-    [view, selection, root, collapsed],
+    [theme, view, selection, root, collapsed],
   )
 
   useEffect(() => {
@@ -172,6 +188,9 @@ export default function App() {
               {doc.saveError ? <span className="warn small">Autosave failed</span> : null}
             </div>
             <div className="tools">
+              <button className="theme-toggle" onClick={() => setTheme(theme === 'light' ? 'dark' : 'light')} title={theme === 'light' ? 'Switch to dark theme' : 'Switch to light theme'}>
+                {theme === 'light' ? '☾' : '☀'}
+              </button>
               <button onClick={doc.undo} disabled={!doc.canUndo} title="Undo (⌘Z)">
                 ↶
               </button>

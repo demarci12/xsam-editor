@@ -1,10 +1,11 @@
 import { useMemo, useState } from 'react'
-import { reviewState, useFilter, EditedMark, ToeeChip } from '../components/common'
+import { reviewState, useFilter, EditedMark, ToeeChip, propertyUsage } from '../components/common'
+import { CELL_TITLE, PROPERTY_SHORT, cellState } from '../components/SecurityProperties'
 import { ImpactBadge, LevelBadge, ReviewChip, RiskBadge } from '../components/Level'
 import { useDocCtx, useUI } from '../context'
 import { computeRisks, type RiskRow } from '../tara/risk'
 import { impactIndex, impactLevelOf } from '../xsam/impact'
-import { CATEGORIES, CATEGORY_PREFIX, IMPACT_CATEGORIES, IMPACT_LEVELS, type Component } from '../xsam/types'
+import { CATEGORIES, CATEGORY_PREFIX, CS_PROPERTIES, CS_PROPERTY_LABEL, IMPACT_CATEGORIES, IMPACT_LEVELS, type Component, type ToeeRef } from '../xsam/types'
 
 const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
 
@@ -239,7 +240,8 @@ export function ItemView() {
     </div>
   )
   return (
-    <div className="view item-view">
+    <div className="view">
+      <div className="item-view">
       <div className="col">
         <Toolbar title="Components" count={comps.length} box={null} addLabel="Component" onAdd={() => select({ kind: 'component', id: doc.actions.add('component').id })} />
         <div className="tree">{roots.map((r) => tree(r, 0))}</div>
@@ -283,6 +285,98 @@ export function ItemView() {
           </tbody>
         </table>
       </div>
+      </div>
+      <PropertyMatrix />
+    </div>
+  )
+}
+
+/** Assets × cybersecurity properties: click a cell to cycle undecided → relevant → not relevant. */
+function PropertyMatrix() {
+  const doc = useDocCtx()
+  const { selection, select } = useUI()
+  const usage = useMemo(() => propertyUsage(doc), [doc])
+  const [hideEmpty, setHideEmpty] = useState(true)
+  const assets: { ref: ToeeRef; name: string; title: string }[] = [
+    ...Object.values(doc.model.data).map((d) => ({ ref: { kind: 'data' as const, id: d.id }, name: d.name, title: d.title })),
+    ...Object.values(doc.model.components).map((c) => ({ ref: { kind: 'component' as const, id: c.id }, name: c.name, title: c.title })),
+    ...Object.values(doc.model.channels).map((c) => ({ ref: { kind: 'channel' as const, id: c.id }, name: c.name, title: c.title })),
+  ].sort((a, b) => a.ref.kind.localeCompare(b.ref.kind) || natural(a.name, b.name))
+  const shown = hideEmpty ? assets.filter((a) => usage.has(`${a.ref.kind}:${a.ref.id}`) || doc.extras.assetProperties?.[`${a.ref.kind}:${a.ref.id}`]) : assets
+  let decided = 0
+  let openUsed = 0
+  let conflicts = 0
+  for (const a of assets) {
+    const key = `${a.ref.kind}:${a.ref.id}`
+    for (const p of CS_PROPERTIES) {
+      const st = cellState(doc.extras.assetProperties?.[key]?.[p]?.relevant, usage.get(key)?.get(p)?.length ?? 0)
+      if (st === 'relevant' || st === 'not-relevant') decided++
+      if (st === 'used-unset') openUsed++
+      if (st === 'used-excluded') conflicts++
+    }
+  }
+  return (
+    <div className="prop-matrix">
+      <div className="toolbar">
+        <h2>
+          Security properties <span className="muted">{decided} decided</span>
+        </h2>
+        {openUsed ? <span className="warn small">{openUsed} used by damage scenarios but not decided</span> : null}
+        {conflicts ? <span className="warn small">{conflicts} marked not relevant but used</span> : null}
+        <span className="grow" />
+        <label className="small">
+          <input type="checkbox" checked={hideEmpty} onChange={(e) => setHideEmpty(e.target.checked)} /> only assets in use
+        </label>
+      </div>
+      <table className="grid pm">
+        <thead>
+          <tr>
+            <th>Asset</th>
+            <th>Title</th>
+            {CS_PROPERTIES.map((p) => (
+              <th key={p} className="c" title={CS_PROPERTY_LABEL[p]}>
+                {CS_PROPERTY_LABEL[p]}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {shown.map((a) => {
+            const key = `${a.ref.kind}:${a.ref.id}`
+            const isSel = !!selection && selection.kind === a.ref.kind && 'id' in selection && selection.id === a.ref.id
+            return (
+              <tr key={key} className={isSel ? 'sel' : ''}>
+                <td onClick={() => select({ kind: a.ref.kind, id: a.ref.id })}>
+                  <ToeeChip r={a.ref} />
+                </td>
+                <td className="wide" onClick={() => select({ kind: a.ref.kind, id: a.ref.id })}>
+                  {a.title}
+                </td>
+                {CS_PROPERTIES.map((p) => {
+                  const e = doc.extras.assetProperties?.[key]?.[p]
+                  const uses = usage.get(key)?.get(p) ?? []
+                  const st = cellState(e?.relevant, uses.length)
+                  return (
+                    <td
+                      key={p}
+                      className={`c pcell ps-${st}`}
+                      title={`${CS_PROPERTY_LABEL[p]}: ${CELL_TITLE[st]}${uses.length ? `\nDamage scenarios: ${uses.join(', ')}` : ''}${e?.rationale ? `\nRationale: ${e.rationale}` : ''}`}
+                      onClick={() => doc.actions.setAssetProperty(key, p, e === undefined ? { relevant: true } : e.relevant ? { relevant: false } : null)}
+                    >
+                      <span className="pmark">{st === 'relevant' ? '●' : st === 'not-relevant' || st === 'used-excluded' ? '○' : st === 'used-unset' ? '?' : '·'}</span>
+                      {uses.length ? <sub>{uses.length}</sub> : null}
+                      <span className="sr">{PROPERTY_SHORT[p]}</span>
+                    </td>
+                  )
+                })}
+              </tr>
+            )
+          })}
+        </tbody>
+      </table>
+      <p className="muted small legend-row">
+        <span className="pmark">●</span> relevant · <span className="pmark">○</span> not relevant · <span className="pmark">?</span> used by damage scenarios, not decided · small number = damage scenarios using it. Click a cell to change it; open an asset for rationale.
+      </p>
     </div>
   )
 }

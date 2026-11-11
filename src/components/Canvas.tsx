@@ -34,7 +34,7 @@ function ownerOf(node: FlowNode | undefined, stepIdByName: (n: string) => string
 
 export function Canvas() {
   const doc = useDocCtx()
-  const { root, selection, select, setRoot, collapsed } = useUI()
+  const { root, selection, select, setRoot, collapsed, theme } = useUI()
   const { screenToFlowPosition, getIntersectingNodes, fitView } = useReactFlow()
   const [toast, setToast] = useState<string | null>(null)
 
@@ -158,7 +158,7 @@ export function Canvas() {
         onPaneClick={() => select(null)}
         minZoom={0.1}
         proOptions={{ hideAttribution: true }}
-        colorMode="dark"
+        colorMode={theme}
       >
         <Background gap={24} size={1} />
         <Controls />

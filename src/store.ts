@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { emptyExtras, type Claim, type Control, type Goal, type ReviewComment, type ReviewKey, type ReviewRecord, type TaraExtras, type TaraSettings, type Treatment } from './tara/types'
+import { emptyExtras, type AssetProperty, type Claim, type Control, type Goal, type ReviewComment, type ReviewKey, type ReviewRecord, type TaraExtras, type TaraSettings, type Treatment } from './tara/types'
 import { addRef, refsOf, removeAt, removeRefsTo, renameRef, setGate, wrapInGate, type ExprPath } from './xsam/expr'
 import { FeasibilityEngine } from './xsam/feasibility'
 import { newMpsId, parseXsam } from './xsam/io'
@@ -346,8 +346,10 @@ export function useDoc() {
               ),
             }
           }
-          const reviews = Object.fromEntries(Object.entries(extras.reviews).filter(([k]) => !ids.some((x) => k === `${kind}:${x}`)))
-          return { ...s, model: m, extras: { ...extras, reviews } }
+          const gone = (k: string) => ids.some((x) => k === `${kind}:${x}`)
+          const reviews = Object.fromEntries(Object.entries(extras.reviews).filter(([k]) => !gone(k)))
+          const assetProperties = Object.fromEntries(Object.entries(extras.assetProperties ?? {}).filter(([k]) => !gone(k)))
+          return { ...s, model: m, extras: { ...extras, reviews, assetProperties } }
         })
       },
 
@@ -427,6 +429,14 @@ export function useDoc() {
           const { [id]: _c, ...controls } = x.controls
           void _c
           return { ...x, controls }
+        })
+      },
+      setAssetProperty(assetKey: string, property: string, patch: Partial<AssetProperty> | null) {
+        commitExtras((x) => {
+          const cur = { ...(x.assetProperties?.[assetKey] ?? {}) }
+          if (patch === null) delete cur[property]
+          else cur[property] = { relevant: false, rationale: '', ...cur[property], ...patch }
+          return { ...x, assetProperties: { ...x.assetProperties, [assetKey]: cur } }
         })
       },
       setSettings(patch: Partial<TaraSettings>) {

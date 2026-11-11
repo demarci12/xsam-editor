@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { reviewState } from '../components/common'
+import { propertyUsage, reviewState } from '../components/common'
 import { ImpactBadge, LevelBadge, ReviewChip, RiskBadge } from '../components/Level'
 import { useDocCtx, useUI, type View } from '../context'
 import { computeRisks } from '../tara/risk'
@@ -52,6 +52,11 @@ export function Dashboard() {
   const noTree = risks.filter((r) => !r.ts.threatenedBy && r.feasibilitySource !== 'explicit')
   const noDs = Object.values(m.threatScenarios).filter((t) => !t.damageScenarioIds.length)
   const unratedDs = Object.values(m.damageScenarios).filter((d) => !impactLevelOf(d))
+  const undecidedProps = useMemo(() => {
+    let n = 0
+    for (const [key, pm] of propertyUsage(doc)) for (const p of pm.keys()) if (doc.extras.assetProperties?.[key]?.[p] === undefined) n++
+    return n
+  }, [doc])
   const top = [...risks].sort((a, b) => (b.risk ?? 0) - (a.risk ?? 0)).slice(0, 8)
   const approved = items.filter((i) => i.status === 'Approved').length
 
@@ -127,10 +132,15 @@ export function Dashboard() {
                 <b>{untreated.length}</b> risks at R{th}+ have no treatment decision. <a onClick={() => setView('risks')}>Treat</a>
               </li>
             ) : null}
+            {undecidedProps ? (
+              <li>
+                <b>{undecidedProps}</b> asset security properties are used by damage scenarios but not yet decided in the item definition. <a onClick={() => setView('item')}>Decide</a>
+              </li>
+            ) : null}
             {noTree.length ? <li><b>{noTree.length}</b> threat scenarios have no attack tree.</li> : null}
             {noDs.length ? <li><b>{noDs.length}</b> threat scenarios are not linked to a damage scenario.</li> : null}
             {unratedDs.length ? <li><b>{unratedDs.length}</b> damage scenarios have no impact rating (out of scope?).</li> : null}
-            {!stale.length && !untreated.length && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
+            {!stale.length && !untreated.length && !undecidedProps && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
           </ul>
         </div>
         <div className="card">

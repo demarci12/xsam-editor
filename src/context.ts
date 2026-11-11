@@ -23,7 +23,10 @@ export type Selection =
   | { kind: 'gate'; owner: Owner; path: ExprPath }
   | null
 
+export type Theme = 'light' | 'dark'
+
 export interface UI {
+  theme: Theme
   view: View
   setView: (v: View) => void
   selection: Selection

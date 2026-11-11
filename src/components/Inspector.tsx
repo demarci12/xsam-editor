@@ -28,6 +28,7 @@ import {
 import { EditedMark, Field, MultiPicker, Section, ToeeChip, toeeName, type PickOption } from './common'
 import { ImpactBadge, LevelBadge, RiskBadge, VectorChips } from './Level'
 import { ReviewBox } from './ReviewBox'
+import { SecurityPropertiesEditor } from './SecurityProperties'
 
 /** Typical ISO/SAE 21434 Annex G values per factor; any integer is accepted. */
 const PRESETS: Record<string, [number, string][]> = {
@@ -877,6 +878,9 @@ function ComponentPanel({ c }: { c: Component }) {
           Part of <a onClick={() => select({ kind: 'component', id: parent.id })}>{parent.name} {parent.title}</a>
         </p>
       ) : null}
+      <Section title="Security properties">
+        <SecurityPropertiesEditor target={{ kind: 'component', id: c.id }} />
+      </Section>
       <Section title="Stored data">
         <MultiPicker options={dataOpts} value={c.storedData} onChange={(v) => upd({ storedData: v })} placeholder="data" render={(id) => <a onClick={() => select({ kind: 'data', id })}>{doc.model.data[id]?.name ?? id}</a>} />
       </Section>
@@ -920,6 +924,9 @@ function DataPanel({ d }: { d: DataElement }) {
       <Field label="ID" value={d.name} onChange={(v) => upd({ name: v })} />
       <Field label="Title" value={d.title} onChange={(v) => upd({ title: v })} />
       <Field label="Description" multiline value={d.description} onChange={(v) => upd({ description: v })} />
+      <Section title="Security properties">
+        <SecurityPropertiesEditor target={{ kind: 'data', id: d.id }} />
+      </Section>
       <Section title="Stored in">
         <ul className="links">
           {where.map((c) => (
@@ -967,6 +974,9 @@ function ChannelPanel({ c }: { c: Channel }) {
       <Field label="ID" value={c.name} onChange={(v) => upd({ name: v })} />
       <Field label="Title" value={c.title} onChange={(v) => upd({ title: v })} />
       <Field label="Description" multiline value={c.description} onChange={(v) => upd({ description: v })} />
+      <Section title="Security properties">
+        <SecurityPropertiesEditor target={{ kind: 'channel', id: c.id }} />
+      </Section>
       <Section title="Endpoints">
         <MultiPicker options={compOpts} value={c.endpoints} onChange={(v) => upd({ endpoints: v })} placeholder="component" render={(id) => <a onClick={() => select({ kind: 'component', id })}>{doc.model.components[id]?.name ?? id}</a>} />
       </Section>
