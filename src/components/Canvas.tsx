@@ -17,10 +17,16 @@ import type { ExprPath } from '../xsam/expr'
 import { nodeTypes } from './nodes'
 
 /** Which expression a connection/drop from this node edits. */
-function ownerOf(node: FlowNode | undefined): { owner: Owner; path: ExprPath } | null {
+function ownerOf(node: FlowNode | undefined, stepIdByName: (n: string) => string | undefined): { owner: Owner; path: ExprPath } | null {
   if (!node) return null
   const d = node.data as AnyNodeData
-  if (d.kind === 'scenario') return { owner: { kind: 'scenario', id: d.scenario.id }, path: [] }
+  if (d.kind === 'scenario') {
+    // XSAM threat scenarios point at one root attack step (AS.TS.n); grow that step's tree.
+    const root = d.scenario.threatenedBy
+    const rootId = root?.kind === 'ref' ? stepIdByName(root.name) : undefined
+    if (rootId) return { owner: { kind: 'step', id: rootId }, path: [] }
+    return { owner: { kind: 'threat', id: d.scenario.id }, path: [] }
+  }
   if (d.kind === 'gate') return { owner: d.owner, path: d.path }
   if (d.kind === 'step' && d.step) return { owner: { kind: 'step', id: d.step.id }, path: [] }
   return null
@@ -45,7 +51,7 @@ export function Canvas() {
         ? `gate:${selection.owner.kind}:${selection.owner.id}:${selection.path.join('.')}`
         : selection?.kind === 'step'
           ? `step:${doc.model.steps[selection.id]?.name}`
-          : selection?.kind === 'scenario'
+              : selection?.kind === 'threat'
             ? `scenario:${selection.id}`
             : null
     setNodes(graph.nodes.map((n) => ({ ...n, selected: n.id === selId })))
@@ -64,7 +70,7 @@ export function Canvas() {
 
   const link = useCallback(
     (from: FlowNode | undefined, stepName: string) => {
-      const target = ownerOf(from)
+      const target = ownerOf(from, (n) => doc.stepByName.get(n)?.id)
       if (!target) return flash('Drop onto a scenario, gate or step')
       if (target.owner.kind === 'step' && doc.model.steps[target.owner.id]?.name === stepName)
         return flash('A step cannot refine itself')
@@ -118,7 +124,7 @@ export function Canvas() {
         if (st) setRoot({ kind: 'step', id: st.id })
         return
       }
-      link(hit ?? nodes.find((n) => n.id === (root.kind === 'scenario' ? `scenario:${root.id}` : `step:${doc.model.steps[root.id]?.name}`)), name)
+      link(hit ?? nodes.find((n) => n.id === (root.kind === 'threat' ? `scenario:${root.id}` : `step:${doc.model.steps[root.id]?.name}`)), name)
     },
     [screenToFlowPosition, getIntersectingNodes, root, nodes, link, doc, setRoot],
   )
@@ -141,7 +147,7 @@ export function Canvas() {
         deleteKeyCode={['Delete', 'Backspace']}
         onNodeClick={(_, n) => {
           const d = n.data as AnyNodeData
-          if (d.kind === 'scenario') select({ kind: 'scenario', id: d.scenario.id })
+          if (d.kind === 'scenario') select({ kind: 'threat', id: d.scenario.id })
           else if (d.kind === 'gate') select({ kind: 'gate', owner: d.owner, path: d.path })
           else if (d.step) select({ kind: 'step', id: d.step.id })
         }}

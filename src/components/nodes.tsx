@@ -74,7 +74,7 @@ export function ScenarioNode({ data, selected }: NodeProps<FlowNode>) {
         <LevelBadge level={d.evaluation.level} total={d.evaluation.total} />
       </div>
       <div className="node-title">{d.scenario.title || <i>untitled</i>}</div>
-      <div className="node-foot muted">Threat scenario</div>
+      <div className="node-foot muted">Threat scenario · {d.scenario.damageScenarioIds.length} damage scenarios</div>
       <Handle type="source" position={Position.Bottom} />
     </div>
   )

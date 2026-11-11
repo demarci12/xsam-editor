@@ -31,7 +31,7 @@ const SIZE = {
 export const stepNodeId = (name: string) => `step:${name}`
 export const gateNodeId = (owner: Owner, path: ExprPath) => `gate:${owner.kind}:${owner.id}:${path.join('.')}`
 
-export type Root = { kind: 'scenario'; id: string } | { kind: 'step'; id: string }
+export type Root = { kind: 'threat'; id: string } | { kind: 'step'; id: string }
 
 /**
  * Build the visual attack tree for a root. Steps referenced from several places are
@@ -39,7 +39,7 @@ export type Root = { kind: 'scenario'; id: string } | { kind: 'step'; id: string
  */
 export function buildGraph(
   root: Root,
-  data: { steps: Record<string, AttackStep>; scenarios: ThreatScenario[] },
+  data: { steps: Record<string, AttackStep>; threatScenarios: Record<string, ThreatScenario> },
   engine: FeasibilityEngine,
   collapsed: Set<string>,
 ): { nodes: FlowNode[]; edges: Edge[] } {
@@ -52,13 +52,13 @@ export function buildGraph(
   let rootOwner: Owner
   let rootExpr: Expr | null
 
-  if (root.kind === 'scenario') {
-    const sc = data.scenarios.find((s) => s.id === root.id)
+  if (root.kind === 'threat') {
+    const sc = data.threatScenarios[root.id]
     if (!sc) return { nodes: [], edges: [] }
-    rootEval = engine.evaluateExpr(sc.attackPaths)
+    rootEval = engine.evaluateExpr(sc.threatenedBy)
     rootId = `scenario:${sc.id}`
-    rootOwner = { kind: 'scenario', id: sc.id }
-    rootExpr = sc.attackPaths
+    rootOwner = { kind: 'threat', id: sc.id }
+    rootExpr = sc.threatenedBy
     nodes.set(rootId, { id: rootId, type: 'scenario', position: { x: 0, y: 0 }, data: { kind: 'scenario', scenario: sc, evaluation: rootEval } })
   } else {
     const st = data.steps[root.id]

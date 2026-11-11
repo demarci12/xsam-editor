@@ -1,12 +1,17 @@
 // @vitest-environment jsdom
-import { readFileSync } from 'node:fs'
+import { existsSync, readFileSync } from 'node:fs'
 import { resolve } from 'node:path'
 import { describe, expect, it } from 'vitest'
 import { addRef, formatExpr, parseExpr, removeAt, setGate } from './expr'
 import { FeasibilityEngine } from './feasibility'
+import { impactLevelOf } from './impact'
 import { parseXsam, serializeXsam } from './io'
 
-const sample = readFileSync(resolve(__dirname, '../../samples/APCatalog1.3.xsam'), 'utf8')
+const catalogPath = resolve(__dirname, '../../samples/APCatalog1.3.xsam')
+const catalog = readFileSync(catalogPath, 'utf8')
+// Confidential customer model: only present on machines that have it (git-ignored).
+const privatePath = resolve(__dirname, '../../samples/private/private-model-v10.xsam')
+const priv = existsSync(privatePath) ? readFileSync(privatePath, 'utf8') : null
 
 describe('expr', () => {
   it('round-trips nested expressions', () => {
@@ -23,43 +28,89 @@ describe('expr', () => {
   })
 })
 
-describe('sample catalog', () => {
-  const model = parseXsam(sample)
-  const steps = Object.values(model.steps)
+function commonChecks(name: string, xml: () => string, staleLevel: (stepName: string) => boolean = () => false) {
+  describe(name, () => {
+    it('serializes an unchanged model byte-for-byte', () => {
+      const x = xml()
+      expect(serializeXsam(parseXsam(x), x)).toBe(x)
+    })
+    it('reproduces every stored attack feasibility level', () => {
+      const m = parseXsam(xml())
+      const engine = new FeasibilityEngine(Object.values(m.steps))
+      const bad = Object.values(m.steps)
+        .map((s) => ({ name: s.name, stored: s.storedLevel, computed: engine.evaluate(s.name).level }))
+              .filter((r) => r.stored !== r.computed && !staleLevel(r.name))
+      expect(bad).toEqual([])
+    })
+    it('round-trips an edited model', () => {
+      const x = xml()
+      const m = parseXsam(x)
+      const s = Object.values(m.steps)[0]
+      s.title = 'Edited "title" with <xml> & newline\nsecond line'
+      s.ratings.Time = { value: 19, rationale: 'r' }
+      const again = parseXsam(serializeXsam(m, x))
+      expect(again.steps[s.id].title).toBe(s.title)
+      expect(again.steps[s.id].ratings.Time).toEqual({ value: 19, rationale: 'r' })
+    })
+  })
+}
 
-  it('parses all chunks and steps', () => {
-    expect(model.chunks).toHaveLength(14)
-    expect(steps).toHaveLength(124)
+commonChecks('APCatalog sample', () => catalog)
+
+describe.skipIf(!priv)('private model', () => {
+  // The AS.TS.* threat-scenario roots are stored as "High" although their children compute
+  // to Low/Medium (e.g. AS.TS.5 = ASC.UDS.012 which itself is stored Low): stale in the file.
+  commonChecks('private', () => priv!, (n) => n.startsWith('AS.TS.'))
+  const m = priv ? parseXsam(priv) : null
+
+  it('parses the whole TARA', () => {
+    expect(Object.keys(m!.damageScenarios)).toHaveLength(37)
+    expect(Object.keys(m!.threatScenarios)).toHaveLength(37)
+    expect(Object.keys(m!.steps)).toHaveLength(100)
+    expect(Object.keys(m!.components)).toHaveLength(23)
+    expect(Object.keys(m!.data)).toHaveLength(11)
+    expect(Object.keys(m!.channels)).toHaveLength(13)
+    expect(m!.checklist?.groups).toHaveLength(7)
   })
 
-  it('reproduces every stored feasibility level', () => {
-    const engine = new FeasibilityEngine(steps)
-    const mismatches = steps
-      .map((s) => ({ name: s.name, stored: s.storedLevel, computed: engine.evaluate(s.name).level }))
+  it('reproduces every stored impact level', () => {
+    const bad = Object.values(m!.damageScenarios)
+      .map((d) => ({ name: d.name, stored: d.storedImpactLevel ?? null, computed: impactLevelOf(d) }))
       .filter((r) => r.stored !== r.computed)
-    expect(mismatches).toEqual([])
+    expect(bad).toEqual([])
   })
 
-  it('round-trips through serialize without changing the model', () => {
-    const again = parseXsam(serializeXsam(model, sample))
-    expect(again).toEqual(model)
+  it('persists new damage and threat scenarios with links', () => {
+    const mm = structuredClone(m!)
+    const dsChunk = mm.chunks.find((c) => c.name === 'Damage Scenarios')!
+    const tsChunk = mm.chunks.find((c) => c.name === 'Threat Scenarios')!
+    const data = Object.values(mm.data)[0]
+    mm.damageScenarios.NEWDS = {
+      id: 'NEWDS', name: 'DS.NEW.1', title: 'New', description: '', chunkId: dsChunk.id,
+      impacts: { S: { option: 'AB.S2', rationale: 'why' } }, assets: [{ id: 'QA1', property: 'Integ', target: { kind: 'data', id: data.id } }],
+      scale: Object.values(mm.damageScenarios)[5].scale,
+    }
+    dsChunk.elementIds.push('NEWDS')
+    mm.threatScenarios.NEWTS = {
+      id: 'NEWTS', name: 'TS.NEW', title: 'T', description: '', chunkId: tsChunk.id,
+      threatenedBy: parseExpr('AS.TS.4'), damageScenarioIds: ['NEWDS'], actedOn: [{ kind: 'data', id: data.id }],
+    }
+    tsChunk.elementIds.push('NEWTS')
+    const again = parseXsam(serializeXsam(mm, priv))
+    expect(again.damageScenarios.NEWDS.impacts.S).toEqual({ option: 'AB.S2', rationale: 'why' })
+    expect(again.damageScenarios.NEWDS.assets[0].target.id).toBe(data.id)
+    expect(impactLevelOf(again.damageScenarios.NEWDS)).toBe('Ser')
+    expect(again.threatScenarios.NEWTS.damageScenarioIds).toEqual(['NEWDS'])
+    expect(formatExpr(again.threatScenarios.NEWTS.threatenedBy)).toBe('AS.TS.4')
   })
 
-  it('keeps data the editor does not model', () => {
-    const out = serializeXsam(model, sample)
-    expect(out).toContain('ThreatClassRef')
-    expect(out).toContain('ResultReportChunk')
-  })
-
-  it('persists threat scenarios and new steps', () => {
-    const m = structuredClone(model)
-    const chunk = m.chunks[0]
-    m.steps['NEWID'] = { id: 'NEWID', name: 'ASC.9999', title: 'New', description: '', chunkId: chunk.id, ratings: { Time: { value: 4 } }, refinedBy: null }
-    chunk.stepIds.push('NEWID')
-    m.scenarios.push({ id: 'SC1', name: 'TS.001', title: 'Spoof brake', description: 'd', attackPaths: parseExpr('or(ASC.9999, ASC.0103)') })
-    const again = parseXsam(serializeXsam(m, sample))
-    expect(again.steps['NEWID'].ratings.Time?.value).toBe(4)
-    expect(again.scenarios).toEqual(m.scenarios)
-    expect(again.chunks).toHaveLength(14)
+  it('deletes elements', () => {
+    const mm = structuredClone(m!)
+    const ts = Object.values(mm.threatScenarios)[0]
+    delete mm.threatScenarios[ts.id]
+    mm.chunks.forEach((c) => (c.elementIds = c.elementIds.filter((x) => x !== ts.id)))
+    const again = parseXsam(serializeXsam(mm, priv))
+    expect(again.threatScenarios[ts.id]).toBeUndefined()
+    expect(Object.keys(again.threatScenarios)).toHaveLength(36)
   })
 })
