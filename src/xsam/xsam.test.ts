@@ -113,6 +113,10 @@ describe.skipIf(!priv)(`private model ${version}`, () => {
     for (const r of rows) if (r.risk && r.residualRisk) expect(r.residualRisk).toBeLessThanOrEqual(r.risk)
     // TS.5 = AS.TS.5 = ASC.UDS.012, which is mitigated by applied controls: no path left.
     expect(rows.find((r) => r.ts.name === 'TS.5')!.residualBlocked).toBe(true)
+    // A control without RemoveAllDamage and without a bypass rating (e.g. logging) has no effect.
+    const noEffect = structuredClone(m!)
+    for (const c of Object.values(noEffect.controls)) c.effects = []
+    expect(computeRisks(noEffect, emptyExtras(), new FeasibilityEngine(Object.values(noEffect.steps))).some((r) => r.residualBlocked)).toBe(false)
     // Planned controls don't count.
     const extras = emptyExtras()
     for (const c of Object.values(m!.controls)) extras.controlMeta[c.id] = { status: 'Planned', goalIds: [] }

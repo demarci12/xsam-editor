@@ -42,8 +42,8 @@ export interface ResidualModel {
 
 /**
  * Residual analysis: a step whose `mitigatedBy` is satisfied by applied controls is either
- * cut off (control has no rating: it removes the damage) or needs at least the attack
- * potential rated on the controls to bypass them.
+ * cut off (control has no rating and the RemoveAllDamage effect) or needs at least the attack
+ * potential rated on the controls to bypass them. Controls without either have no effect.
  */
 export function residualModel(model: XsamModel, extras: TaraExtras): ResidualModel {
   const byName = new Map(Object.values(model.controls).map((c) => [c.name, c]))
@@ -59,7 +59,9 @@ export function residualModel(model: XsamModel, extras: TaraExtras): ResidualMod
     mitigations.set(s.name, ctrls)
     const rated = ctrls.filter((c) => CATEGORIES.some((k) => c.ratings[k]))
     if (!rated.length) {
-      blocked.add(s.name)
+      // Only a control with the RemoveAllDamage effect cuts the path; detective controls don't.
+      if (ctrls.some((c) => c.effects.includes('RemoveAllDamage'))) blocked.add(s.name)
+      else mitigations.delete(s.name)
       return s
     }
     const ratings = { ...s.ratings }
