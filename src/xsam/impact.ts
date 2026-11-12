@@ -52,7 +52,7 @@ export function learnScales(model: XsamModel): ScaleInfo[] {
   for (const s of scales.values()) {
     // Fill gaps by pattern, e.g. AB.S0 seen → AB.S1..3; XY.F1.0 → XY.F3.0.
     const any = Object.values(s.options).flat().find(Boolean) ?? null
-    const prefix = any ? any.split('.')[0] : 'RU'
+    const prefix = any ? any.split('.')[0] : 'IMP'
     for (const c of IMPACT_CATEGORIES) {
       const arr = (s.options[c] ??= [null, null, null, null])
       const sample = arr.find(Boolean)

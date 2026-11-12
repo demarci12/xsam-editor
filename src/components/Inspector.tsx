@@ -383,7 +383,7 @@ function DamagePanel({ d }: { d: DamageScenario }) {
                       onClick={() => {
                         const impacts = { ...d.impacts }
                         if (idx === i) delete impacts[c]
-                        else impacts[c] = { ...e, option: scale?.options[c]?.[i] ?? `RU.${c}${i}` }
+                        else impacts[c] = { ...e, option: scale?.options[c]?.[i] ?? `IMP.${c}${i}` }
                         upd({ impacts, scale: d.scale ?? scale?.id ?? null })
                       }}
                     >

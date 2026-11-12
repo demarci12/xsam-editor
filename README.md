@@ -41,8 +41,7 @@ Everything stays in the browser: it autosaves to IndexedDB, and nothing is uploa
 
 - Attack feasibility: AND takes the highest value of each factor, OR takes the child with the
   lowest total. The sum maps to a level: ≤13 High, ≤19 Medium, ≤24 Low, otherwise Very low. This
-  reproduces every stored step level in both sample files, except the threat-scenario roots
-  described below.
+  reproduces every stored step level in the sample catalog.
 - Impact level: the highest impact category (option index 0–3 → Neg/Mod/Ser/Sev). This reproduces
   every stored level.
 - Threat scenario risk uses the worst linked damage scenario and the attack tree's feasibility.
@@ -53,23 +52,19 @@ Everything stays in the browser: it autosaves to IndexedDB, and nothing is uploa
   An AND branch through a removed step fails, and an OR takes the next branch. If every path is
   removed, the residual risk is R1.
 
-**v12:** 8 damage scenarios (DS.EBS.3.1–3.8) received impact ratings without an updated
-`impactLevel`, and DS.X.2 is rated P1 but still stored as Neg. The tool shows this on the
-dashboard and uses the ratings.
+**Stale stored levels.** MPS exports can carry stored levels that don't match the model, for
+example after edits outside MPS. The dashboard flags `attackFeasibilityLevel` and `impactLevel`
+values that differ from what the model computes, and the tool uses the computed values.
 
 **Opening a newer version** of the same MPS model (same `modelRef`) offers to keep review,
 treatment, goals and security properties. They're keyed by MPS ids, and approvals of elements
 that changed show as "Changed".
 
-**Known data finding:** in `private model v10`, the 23 `AS.TS.*` root steps are stored as "High",
-but their own trees compute Low or Medium. For example, `AS.TS.5 = ASC.UDS.012`, and
-`ASC.UDS.012` is itself stored as Low. The tool flags these and uses the computed value. Check
-them in MPS.
-
 ## Confidential models
 
-Put customer models in `samples/private/`. That folder is git-ignored, and the private tests only
-run when the file is present there.
+Put customer models in `samples/private/`. That folder is git-ignored; model-specific tests
+and edit scripts can live there too (`samples/private/*.test.ts`) and run with the normal test
+command. The repository's own tests use the public catalog sample and a synthetic TARA.
 
 ## Layout
 

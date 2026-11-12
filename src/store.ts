@@ -44,7 +44,7 @@ const CHUNK_FOR: Record<ElementKind, { name: string; tag: Chunk['tag'] }> = {
 
 const EMPTY: DocState = { model: emptyModel(), extras: emptyExtras(), originalXml: null, fileName: 'untitled.xsam' }
 
-// ---- persistence (IndexedDB; the private model is too large for localStorage comfort) ----
+// ---- persistence (IndexedDB; real TARA models are too large for localStorage comfort) ----
 const DB = 'xsam-tara'
 function idb(): Promise<IDBDatabase> {
   return new Promise((res, rej) => {
