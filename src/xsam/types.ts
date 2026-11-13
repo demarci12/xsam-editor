@@ -57,7 +57,7 @@ export type Expr =
 
 /** Reference to an item-definition element (target of evaluation). */
 export interface ToeeRef {
-  kind: 'data' | 'component' | 'channel'
+  kind: 'data' | 'component' | 'channel' | 'dataflow'
   /** MPS id of the referenced element (local model) or the full target string when external. */
   id: string
 }
@@ -90,6 +90,12 @@ export interface SecurityControl {
   /** Attack potential an attacker needs to overcome the control (optional). */
   ratings: Partial<Record<Category, Rating>>
   actedOn: ToeeRef[]
+  /** Feasibility of bypassing the control as stored by MPS. */
+  storedLevel?: string
+  /** The control cannot be bypassed. */
+  isImpossible?: boolean
+  /** Bypassing the control means achieving this threat scenario (e.g. TS.9.1). */
+  dependsOn?: string
 }
 
 export interface ImpactEntry {
@@ -127,9 +133,41 @@ export interface ThreatScenario {
   threatenedBy: Expr | null
   damageScenarioIds: string[]
   actedOn: ToeeRef[]
-  /** Explicit levels set in MPS (override the computed ones). */
-  explicitFeasibility?: string
-  explicitImpact?: string
+  /**
+   * Levels stored by MPS. With an attack tree they are MPS's own result (used for comparison);
+   * without one, the stored feasibility is the only value and is used as is.
+   */
+  storedFeasibility?: string
+  storedImpact?: string
+  storedRisk?: string
+  /** Assumptions that cap this scenario's feasibility / impact / risk (XSAM `dampedBy`). */
+  dampedBy: string[]
+  /** Threat classes (CauseOfCompromise), e.g. GenericCatalog STRIDE classes; references kept verbatim. */
+  threatClasses?: string[]
+}
+
+/** XSAM assumption; can cap feasibility, impact and risk of the threat scenarios it damps. */
+export interface Assumption {
+  id: string
+  name: string
+  title: string
+  description: string
+  chunkId: string
+  maxFeasibility?: string
+  maxImpact?: string
+  maxRisk?: string
+}
+
+/** Data flow inside a channel (read-only in the editor). */
+export interface DataFlow {
+  id: string
+  name: string
+  title: string
+  description: string
+  channelId: string
+  source: string | null
+  target: string | null
+  transferredData: string[]
 }
 
 export interface Component {
@@ -197,7 +235,21 @@ export interface XsamModel {
   data: Record<string, DataElement>
   channels: Record<string, Channel>
   controls: Record<string, SecurityControl>
-  checklist: { id: string; name: string; groups: ChecklistGroup[] } | null
+  dataflows: Record<string, DataFlow>
+  assumptions: Record<string, Assumption>
+  checklists: Checklist[]
+  /**
+   * Attack steps from an imported catalog (e.g. APCatalog1.3) that this model references but
+   * doesn't define. Used for calculation only, never written back.
+   */
+  catalogSteps?: Record<string, AttackStep>
+  catalogName?: string
+}
+
+export interface Checklist {
+  id: string
+  name: string
+  groups: ChecklistGroup[]
 }
 
 export const emptyModel = (): XsamModel => ({
@@ -211,7 +263,9 @@ export const emptyModel = (): XsamModel => ({
   data: {},
   channels: {},
   controls: {},
-  checklist: null,
+  dataflows: {},
+  assumptions: {},
+  checklists: [],
 })
 
 export type ElementKind = 'step' | 'damage' | 'threat' | 'component' | 'data' | 'channel' | 'control'

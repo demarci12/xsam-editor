@@ -64,7 +64,7 @@ export function reviewState(doc: Doc, kind: ReviewKind, id: string) {
 }
 
 export function toeeName(doc: Doc, r: ToeeRef): { name: string; title: string; missing: boolean } {
-  const coll = r.kind === 'data' ? doc.model.data : r.kind === 'component' ? doc.model.components : doc.model.channels
+  const coll = r.kind === 'data' ? doc.model.data : r.kind === 'component' ? doc.model.components : r.kind === 'dataflow' ? (doc.model.dataflows ?? {}) : doc.model.channels
   const el = coll[r.id]
   return el ? { name: el.name, title: el.title, missing: false } : { name: r.id.slice(-12), title: 'external / missing', missing: true }
 }

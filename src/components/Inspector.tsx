@@ -53,7 +53,13 @@ export function Inspector({ onClose }: { onClose?: () => void }) {
       const x = doc.extras
       switch (selection.kind) {
         case 'step':
-          body = m.steps[id] && <StepPanel step={m.steps[id]} />
+          body = m.steps[id] ? <StepPanel step={m.steps[id]} /> : m.catalogSteps?.[id] ? <CatalogStepPanel step={m.catalogSteps[id]} /> : null
+          break
+        case 'dataflow':
+          body = m.dataflows?.[id] && <DataFlowPanel id={id} />
+          break
+        case 'assumption':
+          body = m.assumptions?.[id] && <AssumptionPanel id={id} />
           break
         case 'damage':
           body = m.damageScenarios[id] && <DamagePanel d={m.damageScenarios[id]} />
@@ -161,8 +167,9 @@ function useToeeOptions(): PickOption[] {
       ...Object.values(doc.model.data).map((d) => ({ id: `data|${d.id}`, label: d.name, sub: d.title })),
       ...Object.values(doc.model.components).map((c) => ({ id: `component|${c.id}`, label: c.name, sub: c.title })),
       ...Object.values(doc.model.channels).map((c) => ({ id: `channel|${c.id}`, label: c.name, sub: c.title })),
+      ...Object.values(doc.model.dataflows ?? {}).map((f) => ({ id: `dataflow|${f.id}`, label: f.name, sub: f.title })),
     ],
-    [doc.model.data, doc.model.components, doc.model.channels],
+    [doc.model.data, doc.model.components, doc.model.channels, doc.model.dataflows],
   )
 }
 const toKey = (r: ToeeRef) => `${r.kind}|${r.id}`
@@ -519,7 +526,8 @@ function ThreatPanel({ t }: { t: ThreatScenario }) {
       <div className="kv">
         <span>Feasibility</span>
         <span>
-          <LevelBadge level={risk.feasibility} total={risk.evaluation?.total} /> {risk.feasibilitySource === 'explicit' ? <span className="muted small">set explicitly in MPS</span> : null}
+          <LevelBadge level={risk.feasibility} total={risk.evaluation?.total} /> {risk.feasibilitySource === 'stored' ? <span className="muted small">stored in MPS (no attack tree)</span> : null}
+          {risk.damping.length ? <span className="muted small"> capped by {risk.damping.map((a) => `${a.name}${a.maxFeasibility ? ` (max ${a.maxFeasibility})` : ''}`).join(', ')}</span> : null}
         </span>
         <span>Impact</span>
         <span>
@@ -530,6 +538,16 @@ function ThreatPanel({ t }: { t: ThreatScenario }) {
           <RiskBadge value={risk.risk} /> <a onClick={() => select({ kind: 'risk', id: t.id })}>treatment →</a>
         </span>
       </div>
+      {risk.unresolved.length ? (
+        <p className="warn small">
+          The attack tree references {risk.unresolved.length === 1 ? 'a step' : 'steps'} this file doesn't contain ({risk.unresolved.join(', ')}). The export writes broken references as <code>null</code>. Feasibility uses MPS's stored value{risk.ts.storedFeasibility ? ` (${risk.ts.storedFeasibility})` : ''}.
+        </p>
+      ) : null}
+      {risk.storedMismatch ? (
+        <p className="warn small">
+          MPS stored {Object.entries(risk.storedMismatch).map(([k, v]) => `${k} ${k === 'risk' ? `R${v}` : v}`).join(', ')}; this tool computes {risk.feasibility}/{risk.impact}/R{risk.risk}.
+        </p>
+      ) : null}
       {risk.staleRoot ? (
         <p className="warn small">
           Root step stored as <b>{risk.staleRoot.stored}</b> in the file, but the tree computes <b>{risk.staleRoot.computed}</b>.
@@ -1037,6 +1055,110 @@ function DataPanel({ d }: { d: DataElement }) {
   )
 }
 
+/** Step from an imported catalog: shown for reference, edited in the catalog itself. */
+function CatalogStepPanel({ step }: { step: AttackStep }) {
+  const doc = useDocCtx()
+  const ev = doc.engine.evaluate(step.name)
+  return (
+    <div className="panel">
+      <Head kind="Catalog attack step" name={step.name} right={<LevelBadge level={ev.level} total={ev.total} />} />
+      <p className="catalog-note">From {doc.model.catalogName ?? 'an imported catalog'}: read-only here, not written to this model.</p>
+      <h3>{step.title}</h3>
+      <p className="small pre">{step.description}</p>
+      <div className="computed">
+        <span className="muted">Computed:</span> <VectorChips vector={ev.vector} /> <LevelBadge level={ev.level} total={ev.total} />
+      </div>
+      {step.refinedBy ? (
+        <p className="small">
+          Refined by <code>{formatExpr(step.refinedBy)}</code>
+        </p>
+      ) : null}
+    </div>
+  )
+}
+
+function DataFlowPanel({ id }: { id: string }) {
+  const doc = useDocCtx()
+  const { select } = useUI()
+  const f = doc.model.dataflows[id]
+  const ch = doc.model.channels[f.channelId]
+  const comp = (cid: string | null) => (cid ? doc.model.components[cid] : undefined)
+  const ref = { kind: 'dataflow' as const, id }
+  const ts = Object.values(doc.model.threatScenarios).filter((t) => t.actedOn.some((a) => a.kind === 'dataflow' && a.id === id))
+  return (
+    <div className="panel">
+      <Head kind="Data flow" name={f.name} />
+      <h3>{f.title}</h3>
+      {f.description ? <p className="small pre">{f.description}</p> : null}
+      <div className="kv">
+        <span>Channel</span>
+        <span>{ch ? <a onClick={() => select({ kind: 'channel', id: ch.id })}>{ch.name} {ch.title}</a> : '–'}</span>
+        <span>From → to</span>
+        <span>
+          {comp(f.source)?.name ?? '?'} → {comp(f.target)?.name ?? '?'}
+        </span>
+        <span>Data</span>
+        <span>
+          {f.transferredData.map((d) => (
+            <a key={d} className="tchip t-data" onClick={() => select({ kind: 'data', id: d })}>
+              {doc.model.data[d]?.name ?? d}
+            </a>
+          ))}
+        </span>
+      </div>
+      <p className="muted small">Data flows are edited in MPS; here they are read-only.</p>
+      <Section title="Security properties">
+        <SecurityPropertiesEditor target={ref} />
+      </Section>
+      <Section title={`Threat scenarios on this flow (${ts.length})`}>
+        <ul className="links">
+          {ts.map((t) => (
+            <li key={t.id}>
+              <a onClick={() => select({ kind: 'threat', id: t.id })}>
+                <code>{t.name}</code> {t.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </Section>
+    </div>
+  )
+}
+
+function AssumptionPanel({ id }: { id: string }) {
+  const doc = useDocCtx()
+  const { select } = useUI()
+  const a = doc.model.assumptions[id]
+  const ts = Object.values(doc.model.threatScenarios).filter((t) => (t.dampedBy ?? []).includes(a.name))
+  return (
+    <div className="panel">
+      <Head kind="Assumption" name={a.name} />
+      <h3>{a.title}</h3>
+      {a.description ? <p className="small pre">{a.description}</p> : null}
+      <div className="kv">
+        <span>Max feasibility</span>
+        <span>{a.maxFeasibility ? <LevelBadge level={a.maxFeasibility} /> : '–'}</span>
+        <span>Max impact</span>
+        <span>{a.maxImpact ? <ImpactBadge level={a.maxImpact} /> : '–'}</span>
+        <span>Max risk</span>
+        <span>{a.maxRisk ? <RiskBadge value={Number(a.maxRisk)} /> : '–'}</span>
+      </div>
+      <Section title={`Damps threat scenarios (${ts.length})`}>
+        <ul className="links">
+          {ts.map((t) => (
+            <li key={t.id}>
+              <a onClick={() => select({ kind: 'threat', id: t.id })}>
+                <code>{t.name}</code> {t.title}
+              </a>
+            </li>
+          ))}
+        </ul>
+      </Section>
+      <p className="muted small">Assumptions are edited in MPS; here they are read-only.</p>
+    </div>
+  )
+}
+
 function ChannelPanel({ c }: { c: Channel }) {
   const doc = useDocCtx()
   const { select } = useUI()
@@ -1054,6 +1176,21 @@ function ChannelPanel({ c }: { c: Channel }) {
       <Section title="Endpoints">
         <MultiPicker options={compOpts} value={c.endpoints} onChange={(v) => upd({ endpoints: v })} placeholder="component" render={(id) => <a onClick={() => select({ kind: 'component', id })}>{doc.model.components[id]?.name ?? id}</a>} />
       </Section>
+      {Object.values(doc.model.dataflows ?? {}).some((f) => f.channelId === c.id) ? (
+        <Section title="Data flows">
+          <ul className="links">
+            {Object.values(doc.model.dataflows)
+              .filter((f) => f.channelId === c.id)
+              .map((f) => (
+                <li key={f.id}>
+                  <a onClick={() => select({ kind: 'dataflow', id: f.id })}>
+                    <code>{f.name}</code> {f.title}
+                  </a>
+                </li>
+              ))}
+          </ul>
+        </Section>
+      ) : null}
       <ReviewBox kind="channel" id={c.id} />
       <Danger
         label="Delete channel"

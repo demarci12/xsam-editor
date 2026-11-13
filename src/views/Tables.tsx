@@ -6,7 +6,7 @@ import { useDocCtx, useUI } from '../context'
 import { computeRisks, type RiskRow } from '../tara/risk'
 import { impactIndex, impactLevelOf } from '../xsam/impact'
 import { refsOf } from '../xsam/expr'
-import { CATEGORIES, CATEGORY_PREFIX, CS_PROPERTIES, CS_PROPERTY_LABEL, IMPACT_CATEGORIES, IMPACT_LEVELS, type Component, type ToeeRef } from '../xsam/types'
+import { CATEGORIES, CATEGORY_PREFIX, CS_PROPERTIES, CS_PROPERTY_LABEL, IMPACT_CATEGORIES, IMPACT_LEVELS, type Checklist, type Component, type ToeeRef } from '../xsam/types'
 
 const natural = (a: string, b: string) => a.localeCompare(b, undefined, { numeric: true })
 
@@ -141,7 +141,8 @@ export function ThreatView() {
               <td>{r.ts.threatenedBy ? <code className="muted">{r.ts.threatenedBy.kind === 'ref' ? r.ts.threatenedBy.name : r.ts.threatenedBy.kind}</code> : <span className="warn small">none</span>}</td>
               <td className="c">{r.ts.damageScenarioIds.length}</td>
               <td>
-                <LevelBadge level={r.feasibility} title={r.feasibilitySource === 'explicit' ? 'Set explicitly in MPS' : undefined} />
+                <LevelBadge level={r.feasibility} title={r.feasibilitySource === 'stored' ? 'Stored in MPS (no attack tree)' : r.damping.length ? `Capped by ${r.damping.map((a) => a.name).join(', ')}` : undefined} />
+                {r.storedMismatch ? <span className="warn small" title={`MPS stored: ${Object.entries(r.storedMismatch).map(([k, v]) => `${k} ${v}`).join(', ')}`}> ≠</span> : null}
                 {r.staleRoot ? <span className="warn small" title={`Stored in file as ${r.staleRoot.stored}`}> ⚠</span> : null}
               </td>
               <td>
@@ -285,6 +286,48 @@ export function ItemView() {
               ))}
           </tbody>
         </table>
+        {Object.keys(doc.model.dataflows ?? {}).length ? (
+          <>
+            <Toolbar title="Data flows" count={Object.keys(doc.model.dataflows).length} box={<span className="muted small">read-only, edited in MPS</span>} />
+            <table className="grid">
+              <tbody>
+                {Object.values(doc.model.dataflows)
+                  .sort((a, b) => natural(a.name, b.name))
+                  .map((f) => (
+                    <tr key={f.id} className={isSel('dataflow', f.id) ? 'sel' : ''} onClick={() => select({ kind: 'dataflow', id: f.id })}>
+                      <td>
+                        <code>{f.name}</code>
+                      </td>
+                      <td className="wide">{f.title}</td>
+                      <td className="small muted">
+                        {doc.model.components[f.source ?? '']?.name ?? '?'} → {doc.model.components[f.target ?? '']?.name ?? '?'}
+                      </td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </>
+        ) : null}
+        {Object.keys(doc.model.assumptions ?? {}).length ? (
+          <>
+            <Toolbar title="Assumptions" count={Object.keys(doc.model.assumptions).length} box={<span className="muted small">read-only, edited in MPS</span>} />
+            <table className="grid">
+              <tbody>
+                {Object.values(doc.model.assumptions)
+                  .sort((a, b) => natural(a.name, b.name))
+                  .map((a) => (
+                    <tr key={a.id} className={isSel('assumption', a.id) ? 'sel' : ''} onClick={() => select({ kind: 'assumption', id: a.id })}>
+                      <td>
+                        <code>{a.name}</code>
+                      </td>
+                      <td className="wide">{a.title}</td>
+                      <td className="small muted">{[a.maxFeasibility && `max ${a.maxFeasibility}`, a.maxImpact && `max ${a.maxImpact}`, a.maxRisk && `max R${a.maxRisk}`].filter(Boolean).join(', ')}</td>
+                    </tr>
+                  ))}
+              </tbody>
+            </table>
+          </>
+        ) : null}
       </div>
       </div>
       <PropertyMatrix />
@@ -302,6 +345,7 @@ function PropertyMatrix() {
     ...Object.values(doc.model.data).map((d) => ({ ref: { kind: 'data' as const, id: d.id }, name: d.name, title: d.title })),
     ...Object.values(doc.model.components).map((c) => ({ ref: { kind: 'component' as const, id: c.id }, name: c.name, title: c.title })),
     ...Object.values(doc.model.channels).map((c) => ({ ref: { kind: 'channel' as const, id: c.id }, name: c.name, title: c.title })),
+    ...Object.values(doc.model.dataflows ?? {}).map((f) => ({ ref: { kind: 'dataflow' as const, id: f.id }, name: f.name, title: f.title })),
   ].sort((a, b) => a.ref.kind.localeCompare(b.ref.kind) || natural(a.name, b.name))
   const shown = hideEmpty ? assets.filter((a) => usage.has(`${a.ref.kind}:${a.ref.id}`) || doc.extras.assetProperties?.[`${a.ref.kind}:${a.ref.id}`]) : assets
   const sum = propertySummary(doc)
@@ -599,12 +643,21 @@ export function ControlsView() {
 
 export function R155View() {
   const doc = useDocCtx()
-  const cl = doc.model.checklist
-  if (!cl) return <div className="view"><p className="muted empty-note">This model has no UN R155 checklist.</p></div>
+  const lists = doc.model.checklists ?? []
+  if (!lists.length) return <div className="view"><p className="muted empty-note">This model has no UN R155 checklist.</p></div>
+  return (
+    <div className="view">
+      {lists.map((cl) => <ChecklistBlock key={cl.id} cl={cl} />)}
+    </div>
+  )
+}
+
+function ChecklistBlock({ cl }: { cl: Checklist }) {
+  const doc = useDocCtx()
   const items = cl.groups.flatMap((g) => g.items.filter((i) => i.kind === 'item'))
   const answered = items.filter((i) => i.relevant || i.notRelevant).length
   return (
-    <div className="view">
+    <div className="checklist-block">
       <div className="toolbar">
         <h2>
           {cl.name} <span className="muted">{answered}/{items.length} answered</span>

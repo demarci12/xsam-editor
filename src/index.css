@@ -313,7 +313,7 @@ table.grid.compact td { padding: 4px 6px; }
 .edited { font-size: 9px; color: var(--accent); margin-left: 3px; vertical-align: super; }
 .edited.new { font-size: 9px; padding: 0 4px; border: 1px solid var(--accent); border-radius: 3px; vertical-align: middle; }
 .tchip { display: inline-block; font-family: ui-monospace, Menlo, monospace; font-size: 10.5px; padding: 0 5px; margin-right: 3px; border-radius: 3px; border: 1px solid var(--line); background: var(--panel-2); }
-.tchip.t-data { border-color: #60a5fa; } .tchip.t-component { border-color: #a78bfa; } .tchip.t-channel { border-color: #22d3ee; }
+.tchip.t-data { border-color: #60a5fa; } .tchip.t-component { border-color: #a78bfa; } .tchip.t-channel { border-color: #22d3ee; } .tchip.t-dataflow { border-color: #34d399; border-style: dotted; }
 .tchip.missing { opacity: 0.6; border-style: dashed; }
 
 /* tree / item */
@@ -459,3 +459,8 @@ table.grid.pm td.pcell sub { font-size: 9.5px; color: var(--muted); margin-left:
 label.check { display: flex; gap: 8px; align-items: center; cursor: pointer; margin-bottom: 6px; }
 label.check input { width: auto; }
 .tag.muted { opacity: 0.6; }
+
+.catalog-note { font-size: 11px; padding: 1px 6px; border-radius: 4px; background: var(--panel-2); border: 1px dashed var(--line); color: var(--muted); }
+.checklist-block { margin-bottom: 28px; }
+.cat-tag { font-size: 9px; color: var(--muted); font-weight: 400; }
+.pre { white-space: pre-wrap; }

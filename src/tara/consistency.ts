@@ -10,11 +10,24 @@ export const STRIDE_PROPERTY: [string, string][] = [
   ['Elevation of Privilege', 'Autho'],
 ]
 
+/** GenericCatalog STRIDE threat classes (node ids) → violated property. */
+export const GENERIC_CATALOG_CLASS: Record<string, string> = {
+  '1HkBurD3Udx': 'Authe', // Spoofing
+  '1HkBurD3Udy': 'Integ', // Tampering
+  '1HkBurD3Ud_': 'Avail', // Denial of service
+  '1HkBurD3Ud$': 'Confi', // Information disclosure
+  '1HkBurD3UdA': 'Autho', // Elevation of privilege
+}
+
 /**
- * XSAM threat scenarios don't store the violated property as a field; it is in the STRIDE
- * title ("Tampering (Integrity) on …") or the description ("Compromised asset: … / Integ").
+ * The violated property of a threat scenario: from its GenericCatalog threat class (MPS's own
+ * data), else the description ("Compromised asset: … / Integ") or the STRIDE title.
  */
 export function threatProperty(ts: ThreatScenario): string | null {
+  for (const c of ts.threatClasses ?? []) {
+    const p = GENERIC_CATALOG_CLASS[c.slice(c.lastIndexOf('/') + 1)]
+    if (c.includes('(GenericCatalog)') && p) return p
+  }
   const m = /Compromised asset:.*?\/\s*([A-Za-z]{5})\b/.exec(ts.description)
   if (m) return m[1]
   for (const [k, p] of STRIDE_PROPERTY) if (ts.title.startsWith(k) || ts.description.includes(`STRIDE category: ${k}`)) return p

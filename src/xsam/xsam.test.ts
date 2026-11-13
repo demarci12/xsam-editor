@@ -8,6 +8,8 @@ import { impactLevelOf } from './impact'
 import { computeRisks } from '../tara/risk'
 import { emptyExtras } from '../tara/types'
 import { emptyModel, type XsamModel } from './types'
+import { attachCatalog, unresolvedSteps } from './catalog'
+import { engineFor } from './feasibility'
 import { threatDamageIssues, threatProperty } from '../tara/consistency'
 import { newMpsId, parseXsam, serializeXsam } from './io'
 
@@ -114,7 +116,7 @@ function demoTara(): XsamModel {
   }
   cDs.elementIds.push('5eeeeeeeee1')
   const ts = (id: string, name: string, title: string, root: string) => {
-    m.threatScenarios[id] = { id, name, title, description: '', chunkId: cTs.id, threatenedBy: parseExpr(root), damageScenarioIds: ['5eeeeeeeee1'], actedOn: [{ kind: 'data', id: '2bbbbbbbbb1' }] }
+    m.threatScenarios[id] = { id, name, title, description: '', chunkId: cTs.id, threatenedBy: parseExpr(root), damageScenarioIds: ['5eeeeeeeee1'], actedOn: [{ kind: 'data', id: '2bbbbbbbbb1' }], dampedBy: [], threatClasses: [] }
     cTs.elementIds.push(id)
   }
   ts('6fffffffff1', 'TS.1', 'Tampering (Integrity) on brake signals', 'AS.TS.1')
@@ -129,8 +131,11 @@ describe('synthetic TARA', () => {
   const risks = (mm: XsamModel, x = emptyExtras()) => new Map(computeRisks(mm, x, new FeasibilityEngine(Object.values(mm.steps))).map((r) => [r.ts.name, r]))
 
   it('writes a model from scratch and reads it back unchanged', () => {
-    const strip = (x: XsamModel) => JSON.parse(JSON.stringify(x, (k, v) => (k === 'storedLevel' || k === 'storedImpactLevel' ? undefined : v)))
+    const stored = new Set(['storedLevel', 'storedImpactLevel', 'storedFeasibility', 'storedImpact', 'storedRisk'])
+    const strip = (x: XsamModel) => JSON.parse(JSON.stringify(x, (k, v) => (stored.has(k) ? undefined : v)))
     expect(strip(back)).toEqual(strip(m))
+    // MPS stores each threat scenario's computed feasibility; so does the writer.
+    expect(back.threatScenarios['6fffffffff2'].storedFeasibility).toBe(engineFor(m).evaluate('AS.TS.2').level)
     expect(back.steps['3ccccccccc4'].storedLevel).toBe(new FeasibilityEngine(Object.values(m.steps)).evaluate('AS.TS.1').level)
     expect(impactLevelOf(back.damageScenarios['5eeeeeeeee1'])).toBe('Sev')
     expect(serializeXsam(back, xml)).toBe(xml)
@@ -176,5 +181,95 @@ describe('synthetic TARA', () => {
     expect(again.threatScenarios['6fffffffff2']).toBeUndefined()
     expect(formatExpr(again.steps['3ccccccccc2'].mitigatedBy)).toBe('or(SC.1, SC.2)')
     expect(again.components['2bbbbbbbbb2'].description).toBe('with "quotes" & <tags>\nand a newline')
+  })
+})
+
+describe('reader: MPS features beyond the basic catalog', () => {
+  const base = demoTara()
+  // Data flow inside the channel, used as a concerned asset and by a threat scenario.
+  const withExtras = (() => {
+    const xml = serializeXsam(base, null)
+    return xml
+      .replace(
+        '</mps:RootNodes>',
+        `    <SystemChunk mps:id="7aaaaaaaaa1" name="Channels" virtualPackage="Item Definition">
+        <Elements>
+            <Channel description="" mps:id="7aaaaaaaaa2" name="Ch.1" title="CAN">
+                <Endpoints/>
+                <Technologies/>
+                <DataFlows>
+                    <DataFlow dataFlowTarget="mps/r:00000000-0000-4000-8000-000000000000(Demo)/2bbbbbbbbb2" dataflowSource="mps/r:00000000-0000-4000-8000-000000000000(Demo)/2bbbbbbbbb2" description="" mps:id="7aaaaaaaaa3" name="DF.1" title="Brake request">
+                        <Technologies/>
+                        <TransferredData>
+                            <DataRef mps:id="7aaaaaaaaa4" target="mps/r:00000000-0000-4000-8000-000000000000(Demo)/2bbbbbbbbb1"/>
+                        </TransferredData>
+                        <AssignedFunctions/>
+                        <Todos/>
+                    </DataFlow>
+                </DataFlows>
+                <AssignedFunctions/>
+                <Todos/>
+                <PackageIdentifiers/>
+            </Channel>
+        </Elements>
+        <DefaultElementType/>
+    </SystemChunk>
+    <SecurityChunk mps:id="7aaaaaaaaa5" name="Assumptions" virtualPackage="Security Analysis">
+        <Elements>
+            <Assumption description="" mps:id="7aaaaaaaaa6" name="Asmp.1" title="Debug disabled">
+                <MaxRL/>
+                <MaxIL/>
+                <MaxAFL>
+                    <AttackFeasibilityLevelRef mps:id="7aaaaaaaaa7" target="name/AttackFeasibilityLevel/Very low"/>
+                </MaxAFL>
+                <Effects/>
+                <InstantiatedClasses/>
+                <Todos/>
+            </Assumption>
+        </Elements>
+        <DefaultElementType/>
+    </SecurityChunk>
+</mps:RootNodes>`,
+      )
+      .replace('name="TS.1" ', 'dampedBy="Asmp.1" name="TS.1" ')
+  })()
+  const m = parseXsam(withExtras)
+
+  it('reads data flows and DataFlowRef assets', () => {
+    expect(m.dataflows['7aaaaaaaaa3']).toMatchObject({ name: 'DF.1', channelId: '7aaaaaaaaa2', transferredData: ['2bbbbbbbbb1'] })
+    expect(serializeXsam(m, withExtras)).toBe(withExtras)
+    const mm = structuredClone(m)
+    mm.threatScenarios['6fffffffff1'].actedOn = [{ kind: 'dataflow', id: '7aaaaaaaaa3' }]
+    const again = parseXsam(serializeXsam(mm, withExtras))
+    expect(again.threatScenarios['6fffffffff1'].actedOn).toEqual([{ kind: 'dataflow', id: '7aaaaaaaaa3' }])
+  })
+
+  it('applies assumption caps (dampedBy)', () => {
+    expect(m.assumptions['7aaaaaaaaa6'].maxFeasibility).toBe('Very low')
+    expect(m.threatScenarios['6fffffffff1'].dampedBy).toEqual(['Asmp.1'])
+    const r = computeRisks(m, emptyExtras(), engineFor(m)).find((x) => x.ts.name === 'TS.1')!
+    expect(r.feasibility).toBe('Very low')
+    expect(r.damping[0].name).toBe('Asmp.1')
+  })
+
+  it('uses the stored bypass level of a control instead of removing the step', () => {
+    const mm = structuredClone(base)
+    mm.controls['4ddddddddd1'].storedLevel = 'Low'
+    const r = computeRisks(mm, emptyExtras(), engineFor(mm)).find((x) => x.ts.name === 'TS.2')!
+    expect(r.residualBlocked).toBe(false)
+    expect(r.residualFeasibility).toBe('Low')
+    mm.controls['4ddddddddd1'].isImpossible = true
+    expect(computeRisks(mm, emptyExtras(), engineFor(mm)).find((x) => x.ts.name === 'TS.2')!.residualBlocked).toBe(true)
+  })
+
+  it('resolves steps from an imported catalog for calculation only', () => {
+    const mm = structuredClone(base)
+    mm.steps['3ccccccccc5'].refinedBy = parseExpr('and(ASC.ACCESS, ASC.0003)') // ASC.0003 lives in APCatalog1.3
+    expect(unresolvedSteps(mm)).toEqual(['ASC.0003'])
+    const withCat = attachCatalog(mm, catalog, 'APCatalog1.3')
+    expect(unresolvedSteps(withCat)).toEqual([])
+    expect(engineFor(withCat).evaluate('AS.TS.2').level).not.toBeNull()
+    const xml = serializeXsam(withCat, null)
+    expect(xml).not.toContain('Accessing components on the vehicle frame') // catalog step not written
   })
 })

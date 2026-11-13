@@ -13,6 +13,7 @@ import { computeRisks } from './tara/risk'
 import { emptyExtras } from './tara/types'
 import { Dashboard, ReviewView, SettingsView } from './views/Overview'
 import { ConceptView, ControlsView, DamageView, ItemView, R155View, RisksView, StepsView, ThreatView } from './views/Tables'
+import { attachCatalog } from './xsam/catalog'
 import { parseXsam, serializeXsam } from './xsam/io'
 import { emptyModel } from './xsam/types'
 
@@ -115,9 +116,11 @@ export default function App() {
       if (fileName.endsWith('.json')) {
         const p = JSON.parse(text)
         if (p.format !== PROJECT_FORMAT) throw new Error('Not a TARA project file')
-        doc.replaceDoc(migrateDoc({ model: p.model, extras: p.extras, originalXml: p.originalXml, fileName: p.fileName }))
+        const migrated = migrateDoc({ model: p.model, extras: p.extras, originalXml: p.originalXml, fileName: p.fileName })
+        doc.replaceDoc({ ...migrated, model: attachCatalog(migrated.model, sampleXml, 'APCatalog1.3') })
       } else {
-        const model = parseXsam(text)
+        // Steps from the bundled APCatalog1.3 that the model references but doesn't define.
+        const model = attachCatalog(parseXsam(text), sampleXml, 'APCatalog1.3')
         // A new version of the same MPS model: keep review, treatment, goals and properties
         // (they are keyed by stable MPS ids); approvals of changed elements show as "Changed".
         const hasWork = Object.keys(doc.extras.reviews).length + Object.keys(doc.extras.treatments).length + Object.keys(doc.extras.goals).length + Object.keys(doc.extras.assetProperties ?? {}).length > 0

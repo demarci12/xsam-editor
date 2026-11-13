@@ -39,13 +39,14 @@ export type Root = { kind: 'threat'; id: string } | { kind: 'step'; id: string }
  */
 export function buildGraph(
   root: Root,
-  data: { steps: Record<string, AttackStep>; threatScenarios: Record<string, ThreatScenario> },
+  data: { steps: Record<string, AttackStep>; threatScenarios: Record<string, ThreatScenario>; catalogSteps?: Record<string, AttackStep> },
   engine: FeasibilityEngine,
   collapsed: Set<string>,
 ): { nodes: FlowNode[]; edges: Edge[] } {
   const nodes = new Map<string, FlowNode>()
   const edges: Edge[] = []
-  const byName = new Map(Object.values(data.steps).map((s) => [s.name, s]))
+  // Catalog steps referenced by the model are drawn too (read-only).
+  const byName = new Map([...Object.values(data.catalogSteps ?? {}), ...Object.values(data.steps)].map((s) => [s.name, s]))
 
   let rootEval: Evaluation
   let rootId: string
@@ -61,7 +62,7 @@ export function buildGraph(
     rootExpr = sc.threatenedBy
     nodes.set(rootId, { id: rootId, type: 'scenario', position: { x: 0, y: 0 }, data: { kind: 'scenario', scenario: sc, evaluation: rootEval } })
   } else {
-    const st = data.steps[root.id]
+    const st = data.steps[root.id] ?? data.catalogSteps?.[root.id]
     if (!st) return { nodes: [], edges: [] }
     rootEval = engine.evaluate(st.name)
     rootId = stepNodeId(st.name)

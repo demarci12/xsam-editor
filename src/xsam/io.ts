@@ -1,5 +1,5 @@
-import { formatExpr, parseExpr } from './expr'
-import { FeasibilityEngine } from './feasibility'
+import { formatExpr, parseExpr, refsOf } from './expr'
+import { engineFor } from './feasibility'
 import { impactLevelOf } from './impact'
 import {
   CATEGORIES,
@@ -38,8 +38,8 @@ export function newMpsId(): string {
 }
 
 const CHUNK_TAGS: ChunkTag[] = ['SystemChunk', 'SecurityChunk', 'SecurityConceptChunk']
-const REF_KIND: Record<string, ToeeRef['kind']> = { DataRef: 'data', ComponentRef: 'component', ChannelRef: 'channel' }
-const KIND_REF: Record<ToeeRef['kind'], string> = { data: 'DataRef', component: 'ComponentRef', channel: 'ChannelRef' }
+const REF_KIND: Record<string, ToeeRef['kind']> = { DataRef: 'data', ComponentRef: 'component', ChannelRef: 'channel', DataFlowRef: 'dataflow' }
+const KIND_REF: Record<ToeeRef['kind'], string> = { data: 'DataRef', component: 'ComponentRef', channel: 'ChannelRef', dataflow: 'DataFlowRef' }
 
 const kids = (el: Element | undefined | null, local?: string) =>
   el ? Array.from(el.children).filter((c) => !local || c.localName === local) : []
@@ -114,7 +114,7 @@ export function parseXsam(xml: string): XsamModel {
 
   for (const chunkEl of kids(root)) {
     if (chunkEl.localName === 'Checklist') {
-      m.checklist = {
+      m.checklists.push({
         id: mpsId(chunkEl),
         name: attr(chunkEl, 'name'),
         groups: kids(kid(chunkEl, 'Groups'), 'ChecklistItemGroup').map((g) => ({
@@ -129,7 +129,7 @@ export function parseXsam(xml: string): XsamModel {
             rationale: attr(it, 'rationale'),
           })),
         })),
-      }
+      })
       continue
     }
     if (!CHUNK_TAGS.includes(chunkEl.localName as ChunkTag)) continue
@@ -187,8 +187,11 @@ export function parseXsam(xml: string): XsamModel {
             threatenedBy: parseExpr(el.getAttribute('threatenedBy')),
             damageScenarioIds: kids(kid(el, 'DamageScenarios'), 'DamageScenarioRef').map((r) => refId(attr(r, 'damageScenario'), ref)),
             actedOn: parseToees(kid(el, 'ActedOnTOEEs'), ref),
-            ...(el.getAttribute('attackFeasibilityLevel') ? { explicitFeasibility: attr(el, 'attackFeasibilityLevel') } : {}),
-            ...(el.getAttribute('impactLevel') ? { explicitImpact: attr(el, 'impactLevel') } : {}),
+            ...(el.getAttribute('attackFeasibilityLevel') ? { storedFeasibility: attr(el, 'attackFeasibilityLevel') } : {}),
+            ...(el.getAttribute('impactLevel') ? { storedImpact: attr(el, 'impactLevel') } : {}),
+            ...(el.getAttribute('riskLevel') ? { storedRisk: attr(el, 'riskLevel') } : {}),
+            dampedBy: refsOf(parseExpr(el.getAttribute('dampedBy'))),
+            threatClasses: kids(kid(el, 'CauseOfCompromise'), 'ThreatClassRef').map((r) => attr(r, 'target')),
           }
           m.threatScenarios[id] = t
           break
@@ -200,6 +203,9 @@ export function parseXsam(xml: string): XsamModel {
             effects: kids(kid(el, 'Effects')).map((e) => e.localName),
             ratings: parseRatings(el),
             actedOn: parseToees(kid(el, 'ActedOnTOEEs'), ref),
+            ...(el.getAttribute('attackFeasibilityLevel') ? { storedLevel: attr(el, 'attackFeasibilityLevel') } : {}),
+            ...(el.getAttribute('isImpossible') === 'true' ? { isImpossible: true } : {}),
+            ...(el.getAttribute('dependsOn') ? { dependsOn: attr(el, 'dependsOn') } : {}),
           }
           m.controls[id] = c
           break
@@ -212,7 +218,35 @@ export function parseXsam(xml: string): XsamModel {
           break
         case 'Channel':
           m.channels[id] = { ...base, endpoints: kids(kid(el, 'Endpoints'), 'ComponentRef').map((r) => refId(attr(r, 'target'), ref)) }
+          for (const f of kids(kid(el, 'DataFlows'), 'DataFlow')) {
+            const src = f.getAttribute('dataflowSource') ?? f.getAttribute('dataFlowSource')
+            const tgt = f.getAttribute('dataFlowTarget') ?? f.getAttribute('dataflowTarget')
+            m.dataflows[mpsId(f)] = {
+              id: mpsId(f),
+              name: attr(f, 'name'),
+              title: attr(f, 'title'),
+              description: attr(f, 'description'),
+              channelId: id,
+              source: src ? refId(src, ref) : null,
+              target: tgt ? refId(tgt, ref) : null,
+              transferredData: kids(kid(f, 'TransferredData'), 'DataRef').map((r) => refId(attr(r, 'target'), ref)),
+            }
+          }
           break
+        case 'Assumption': {
+          // Read-only: caps for the threat scenarios that reference it via dampedBy.
+          const level = (box: string) => {
+            const t = Array.from(kid(el, box)?.querySelectorAll('*') ?? []).find((x) => x.getAttribute('target'))?.getAttribute('target')
+            return t ? lastSeg(t) : undefined
+          }
+          m.assumptions[id] = {
+            ...base,
+            ...(level('MaxAFL') ? { maxFeasibility: level('MaxAFL') } : {}),
+            ...(level('MaxIL') ? { maxImpact: level('MaxIL') } : {}),
+            ...(level('MaxRL') ? { maxRisk: level('MaxRL') } : {}),
+          }
+          continue // left untouched on export
+        }
         default:
           continue // not modelled (Scenario, Assumption, …): left untouched on export
       }
@@ -268,8 +302,9 @@ export function serializeXsam(model: XsamModel, originalXml: string | null, opts
   const doc = parseDoc(originalXml || EMPTY_XSAM(modelRef))
   const baseline = originalXml ? parseXsam(originalXml) : emptyModel()
   const root = doc.documentElement
-  const engine = new FeasibilityEngine(Object.values(model.steps))
-  const baseEngine = new FeasibilityEngine(Object.values(baseline.steps))
+  // Catalog steps (imported by the MPS model) take part in the calculation but are never written.
+  const engine = engineFor(model)
+  const baseEngine = engineFor({ ...baseline, catalogSteps: model.catalogSteps })
   const mk = (local: string, attrs: Record<string, string> = {}) => {
     const el = doc.createElementNS(XSAM_NS, local)
     for (const [k, v] of Object.entries(attrs)) {
@@ -450,8 +485,12 @@ export function serializeXsam(model: XsamModel, originalXml: string | null, opts
     if (!fresh && prev && same({ ...prev, chunkId: 0 }, { ...t, chunkId: 0 })) return el
     baseAttrs(el, t)
     setAttr(el, 'threatenedBy', t.threatenedBy ? formatExpr(t.threatenedBy) : null)
-    setAttr(el, 'attackFeasibilityLevel', t.explicitFeasibility ?? null)
-    setAttr(el, 'impactLevel', t.explicitImpact ?? null)
+    // With an attack tree MPS stores the tree's level; without one the stored value is kept.
+    const ev = t.threatenedBy ? engine.evaluateExpr(t.threatenedBy) : null
+    // A tree with references the file can't resolve keeps MPS's stored level.
+    const treeLevel = ev && !ev.unresolved.length ? ev.level : null
+    setAttr(el, 'attackFeasibilityLevel', treeLevel ?? t.storedFeasibility ?? null)
+    setAttr(el, 'impactLevel', t.storedImpact ?? null)
     if (fresh || !same(prev?.damageScenarioIds, t.damageScenarioIds)) {
       const box = ensureKid(el, 'DamageScenarios')
       const old = new Map(kids(box, 'DamageScenarioRef').map((r) => [refId(attr(r, 'damageScenario'), modelRef), r]))
@@ -525,12 +564,12 @@ export function serializeXsam(model: XsamModel, originalXml: string | null, opts
   for (const [id, el] of existing) if (!used.has(id)) removeWithWhitespace(el)
 
   // Checklist answers.
-  if (model.checklist) {
+  if (model.checklists.length) {
     const items = new Map<string, Element>()
     root.querySelectorAll('*').forEach((e) => {
       if (e.localName === 'ChecklistItem') items.set(mpsId(e), e)
     })
-    for (const g of model.checklist.groups)
+    for (const g of model.checklists.flatMap((c) => c.groups))
       for (const it of g.items) {
         const e = items.get(it.id)
         if (!e || it.kind !== 'item') continue

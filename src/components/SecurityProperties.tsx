@@ -36,6 +36,7 @@ export function propertySummary(doc: Parameters<typeof propertyUsage>[0]) {
     ...Object.keys(doc.model.data).map((id) => `data:${id}`),
     ...Object.keys(doc.model.components).map((id) => `component:${id}`),
     ...Object.keys(doc.model.channels).map((id) => `channel:${id}`),
+    ...Object.keys(doc.model.dataflows ?? {}).map((id) => `dataflow:${id}`),
   ]
   const n: Record<CellState, number> = { 'from-ds': 0, conflict: 0, gap: 0, 'not-relevant': 0, unset: 0 }
   for (const key of assets) for (const p of CS_PROPERTIES) n[cellState(doc.extras.assetProperties?.[key]?.[p]?.relevant, usage.get(key)?.get(p)?.length ?? 0)]++

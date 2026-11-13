@@ -21,11 +21,14 @@ export function StepNode({ data, selected }: NodeProps<FlowNode>) {
     >
       <Handle type="target" position={Position.Top} />
       <div className="node-head">
-        <code>{d.name}</code>
+        <code>
+          {d.name}
+          {d.step?.id.startsWith('cat:') ? <span className="cat-tag" title="From the imported catalog (read-only)"> cat</span> : null}
+        </code>
         <LevelBadge level={d.evaluation?.level} total={d.evaluation?.total} />
       </div>
       <div className="node-title" title={d.step?.description}>
-        {external ? 'Not in this catalog' : d.step!.title || <i>untitled</i>}
+        {external ? (d.name === 'null' ? 'Broken reference in the export (null)' : 'Not in this model or its catalog') : d.step!.title || <i>untitled</i>}
       </div>
       <div className="node-foot">
         {d.step?.refinedBy ? <span className="muted">refined</span> : <VectorChips vector={d.evaluation?.vector ?? null} />}

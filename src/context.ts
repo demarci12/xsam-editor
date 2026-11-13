@@ -19,7 +19,7 @@ export type View =
   | 'settings'
 
 export type Selection =
-  | { kind: ElementKind | 'risk' | 'goal' | 'claim' | 'control'; id: string }
+  | { kind: ElementKind | 'risk' | 'goal' | 'claim' | 'control' | 'dataflow' | 'assumption'; id: string }
   | { kind: 'gate'; owner: Owner; path: ExprPath }
   | null
 

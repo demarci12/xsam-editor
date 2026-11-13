@@ -54,7 +54,7 @@ export function Catalog() {
                 <code>{t.name}</code>
                 <span className="t">{t.title}</span>
                 <span />
-                <LevelBadge level={t.explicitFeasibility ?? ev.level} />
+                <LevelBadge level={ev.level ?? t.storedFeasibility} />
               </li>
             )
           })}

@@ -51,7 +51,7 @@ export function Dashboard() {
   const th = doc.extras.settings.acceptThreshold
   const untreated = risks.filter((r) => (r.risk ?? 0) >= th && !doc.extras.treatments[r.ts.id]?.decision)
   const stale = risks.filter((r) => r.staleRoot)
-  const noTree = risks.filter((r) => !r.ts.threatenedBy && r.feasibilitySource !== 'explicit')
+  const noTree = risks.filter((r) => !r.ts.threatenedBy && r.feasibilitySource !== 'stored')
   const noDs = Object.values(m.threatScenarios).filter((t) => !t.damageScenarioIds.length)
   const unratedDs = Object.values(m.damageScenarios).filter((d) => !impactLevelOf(d))
   // Stored impactLevel in the imported file that doesn't match that file's own ratings.
@@ -142,6 +142,23 @@ export function Dashboard() {
                 {staleImpact.length > 3 ? '…' : ''}). The tool uses the ratings; let MPS recompute. <a onClick={() => setView('damage')}>Show</a>
               </li>
             ) : null}
+            {risks.some((r) => r.unresolved.length) ? (
+              <li className="warn">
+                <b>{risks.filter((r) => r.unresolved.length).length}</b> threat scenarios have attack trees with broken references in the export (
+                {[...new Set(risks.flatMap((r) => r.unresolved))].slice(0, 4).join(', ')}): MPS's stored feasibility is used for them. Fix the references in MPS.{' '}
+                <a onClick={() => setView('threat')}>Show</a>
+              </li>
+            ) : null}
+            {risks.some((r) => r.storedMismatch) ? (
+              <li className="warn">
+                <b>{risks.filter((r) => r.storedMismatch).length}</b> threat scenarios: stored MPS values differ from what this tool computes (marked ≠ in Threat scenarios).
+              </li>
+            ) : null}
+            {doc.model.catalogSteps ? (
+              <li>
+                {Object.keys(doc.model.catalogSteps).length} attack steps come from the imported catalog {doc.model.catalogName} (used for calculation, read-only).
+              </li>
+            ) : null}
             {links.mismatches.length ? (
               <li className="warn">
                 <b>{links.mismatches.length}</b> threat → damage scenario links where the damage scenario doesn't list the threat's asset and property (e.g.{' '}
@@ -167,7 +184,7 @@ export function Dashboard() {
             {noTree.length ? <li><b>{noTree.length}</b> threat scenarios have no attack tree.</li> : null}
             {noDs.length ? <li><b>{noDs.length}</b> threat scenarios are not linked to a damage scenario.</li> : null}
             {unratedDs.length ? <li><b>{unratedDs.length}</b> damage scenarios have no impact rating (out of scope?).</li> : null}
-            {!stale.length && !staleImpact.length && !untreated.length && !links.mismatches.length && !links.uncovered.length && !props.conflict && !props.gap && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
+            {!stale.length && !staleImpact.length && !risks.some((r) => r.unresolved.length || r.storedMismatch) && !untreated.length && !links.mismatches.length && !links.uncovered.length && !props.conflict && !props.gap && !noTree.length && !noDs.length && !unratedDs.length ? <li className="ok">No findings.</li> : null}
           </ul>
         </div>
         <div className="card">

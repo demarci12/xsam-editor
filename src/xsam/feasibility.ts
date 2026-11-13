@@ -1,4 +1,4 @@
-import { CATEGORIES, type AttackStep, type Category, type Expr, type FeasibilityLevel } from './types'
+import { CATEGORIES, type AttackStep, type Category, type Expr, type FeasibilityLevel, type XsamModel } from './types'
 
 /** Attack potential vector; null entries mean "not rated". */
 export type Vector = Record<Category, number>
@@ -49,10 +49,17 @@ export class FeasibilityEngine {
   private cache = new Map<string, Res>()
   private blockedSteps: Set<string>
 
-  /** `blocked`: steps cut off by a control (residual analysis); a blocked step can't be used by the attacker. */
-  constructor(steps: Iterable<AttackStep>, blocked: Iterable<string> = []) {
+  private minTotal: Map<string, number>
+
+  /**
+   * `blocked`: steps cut off by a control (residual analysis); a blocked step can't be used.
+   * `minTotal`: least attack potential a step needs, e.g. because a control must be bypassed whose
+   * bypass feasibility is only known as a level. Missing potential is added to elapsed time.
+   */
+  constructor(steps: Iterable<AttackStep>, blocked: Iterable<string> = [], minTotal: Map<string, number> = new Map()) {
     for (const s of steps) this.byName.set(s.name, s)
     this.blockedSteps = new Set(blocked)
+    this.minTotal = minTotal
   }
 
   step(name: string) {
@@ -135,7 +142,14 @@ export class FeasibilityEngine {
       const vector = own && r.vector ? maxV(own, r.vector) : (r.vector ?? own)
       result = { vector: r.blocked ? null : vector, path: new Set([name, ...r.path]), unresolved: r.unresolved, blocked: r.blocked }
     } else {
-      result = { vector: own, path: new Set([name]), unresolved: [], blocked: false }
+      // An unrated leaf needs no attack potential: MPS rates it High (all factors 0).
+      result = { vector: own ?? { ...ZERO }, path: new Set([name]), unresolved: [], blocked: false }
+    }
+    const min = this.minTotal.get(name)
+    if (min !== undefined && !result.blocked) {
+      const v = result.vector ?? { ...ZERO }
+      const missing = min - sum(v)
+      if (missing > 0) result = { ...result, vector: { ...v, Time: v.Time + missing } }
     }
     visiting.delete(name)
     this.cache.set(name, result)
@@ -170,3 +184,18 @@ export class FeasibilityEngine {
 }
 
 export { ZERO }
+
+/** Model steps plus the imported catalog steps it references (model steps win on a name clash). */
+export function allSteps(m: Pick<XsamModel, 'steps' | 'catalogSteps'>): AttackStep[] {
+  const own = Object.values(m.steps)
+  if (!m.catalogSteps) return own
+  const names = new Set(own.map((s) => s.name))
+  return [...own, ...Object.values(m.catalogSteps).filter((s) => !names.has(s.name))]
+}
+
+export function engineFor(m: Pick<XsamModel, 'steps' | 'catalogSteps'>, blocked: Iterable<string> = [], minTotal?: Map<string, number>): FeasibilityEngine {
+  return new FeasibilityEngine(allSteps(m), blocked, minTotal)
+}
+
+/** Least attack-potential total for a feasibility level (ISO/SAE 21434 Annex G thresholds). */
+export const LEVEL_MIN_TOTAL: Record<FeasibilityLevel, number> = { High: 0, Medium: 14, Low: 20, 'Very low': 25 }

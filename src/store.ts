@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { DEFAULT_CONTROL_META, emptyExtras, type AssetProperty, type Claim, type ControlMeta, type Goal, type ReviewComment, type ReviewKey, type ReviewRecord, type TaraExtras, type TaraSettings, type Treatment } from './tara/types'
 import { addRef, refsOf, removeAt, removeRefsTo, renameRef, setGate, wrapInGate, type ExprPath } from './xsam/expr'
-import { FeasibilityEngine } from './xsam/feasibility'
+import { allSteps, engineFor } from './xsam/feasibility'
 import { newMpsId, parseXsam } from './xsam/io'
 import { emptyModel, type AttackStep, type ChecklistEntry, type Chunk, type ElementKind, type Expr, type ToeeRef, type XsamModel } from './xsam/types'
 
@@ -74,10 +74,20 @@ async function idbSet(key: string, value: unknown) {
 
 /** Fill in fields added in later versions so older autosaves and project files keep working. */
 export function migrateDoc(d: Partial<DocState>): DocState {
+  const old = d.model as (XsamModel & { checklist?: XsamModel['checklists'][number] | null }) | undefined
+  const model = { ...emptyModel(), ...old }
+  if (old?.checklist && !old.checklists?.length) model.checklists = [old.checklist]
+  delete (model as { checklist?: unknown }).checklist
+  for (const t of Object.values(model.threatScenarios)) {
+    const x = t as typeof t & { explicitFeasibility?: string; explicitImpact?: string }
+    t.dampedBy ??= []
+    if (x.explicitFeasibility && !t.storedFeasibility) t.storedFeasibility = x.explicitFeasibility
+    if (x.explicitImpact && !t.storedImpact) t.storedImpact = x.explicitImpact
+  }
   return {
     ...EMPTY,
     ...d,
-    model: { ...emptyModel(), ...d.model },
+    model,
     extras: { ...emptyExtras(), ...d.extras, settings: { ...emptyExtras().settings, ...d.extras?.settings } },
   } as DocState
 }
@@ -168,8 +178,9 @@ export function useDoc() {
   const replaceDoc = useCallback((doc: DocState) => commit(() => doc), [commit])
 
   const { model, extras } = state
-  const engine = useMemo(() => new FeasibilityEngine(Object.values(model.steps)), [model.steps])
-  const stepByName = useMemo(() => new Map(Object.values(model.steps).map((s) => [s.name, s])), [model.steps])
+  const engine = useMemo(() => engineFor(model), [model.steps, model.catalogSteps]) // eslint-disable-line react-hooks/exhaustive-deps
+  /** Own and catalog steps by name (catalog steps are read-only). */
+  const stepByName = useMemo(() => new Map(allSteps(model).map((s) => [s.name, s])), [model.steps, model.catalogSteps]) // eslint-disable-line react-hooks/exhaustive-deps
   /** The model as imported, for change tracking. */
   const baseline = useMemo(() => {
     try {
@@ -185,7 +196,7 @@ export function useDoc() {
       ? { ...m, threatScenarios: { ...m.threatScenarios, [o.id]: { ...m.threatScenarios[o.id], threatenedBy: e } } }
       : { ...m, steps: { ...m.steps, [o.id]: { ...m.steps[o.id], refinedBy: e } } }
 
-  const baselineEngine = useMemo(() => (baseline ? new FeasibilityEngine(Object.values(baseline.steps)) : null), [baseline])
+  const baselineEngine = useMemo(() => (baseline ? engineFor({ ...baseline, catalogSteps: model.catalogSteps }) : null), [baseline, model.catalogSteps])
 
   const createsCycle = useCallback(
     (owner: Owner, name: string) => {
@@ -372,11 +383,10 @@ export function useDoc() {
       },
 
       updateChecklist(itemId: string, patch: Partial<ChecklistEntry>) {
-        commitModel((m) =>
-          m.checklist
-            ? { ...m, checklist: { ...m.checklist, groups: m.checklist.groups.map((g) => ({ ...g, items: g.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) })) } }
-            : m,
-        )
+        commitModel((m) => ({
+          ...m,
+          checklists: m.checklists.map((cl) => ({ ...cl, groups: cl.groups.map((g) => ({ ...g, items: g.items.map((i) => (i.id === itemId ? { ...i, ...patch } : i)) })) })),
+        }))
       },
       renameProject(name: string) {
         commitModel((m) => ({ ...m, projectName: name }))
