@@ -29,13 +29,19 @@ Everything stays in the browser: it autosaves to IndexedDB, and nothing is uploa
 | UN R155 Annex 5 checklist: relevant / not relevant + rationale | UN R155 checklist | `.xsam` |
 
 **Files**
-- **Export .xsam** writes the model back for MPS. Elements you didn't change stay byte-for-byte
-  identical, including CRLF line endings and MPS whitespace. Anything the tool doesn't model
-  (reports, control scenarios, threat classes, project info) is kept as it was.
+- **Open…** opens an `.xsam` or a `.tara.json` project and remembers the file.
+- **Save (⌘S)** writes the model back into that `.xsam`, ready for MPS, and also saves the
+  linked project file if there is one. A ● marks unsaved changes. Elements you didn't change stay
+  byte-for-byte identical, including CRLF line endings and MPS whitespace, and anything the tool
+  doesn't model (reports, control scenarios, threat classes, project info) is kept as it was.
+- **Save as… (⇧⌘S)** writes the model to a new `.xsam`.
 - **Save project** writes a `.tara.json` file: the original `.xsam`, the edited model, and the
-  treatment, goals, claims, controls and review data, which the XSAM files seen so far have no
-  elements for. Open it again with **Open…**.
-- **Risks CSV** exports the risk table.
+  treatment, goals, claims, controls, security properties and review data. Once saved, ⌘S keeps
+  it up to date.
+- **Risks CSV** downloads the risk table.
+
+Saving in place uses the browser's File System Access API (Chrome, Edge, the Claude app). Other
+browsers download the files instead. Work is also autosaved in the browser (IndexedDB).
 
 ## Calculations
 

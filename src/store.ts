@@ -54,7 +54,7 @@ function idb(): Promise<IDBDatabase> {
     r.onerror = () => rej(r.error)
   })
 }
-async function idbGet<T>(key: string): Promise<T | undefined> {
+export async function idbGet<T>(key: string): Promise<T | undefined> {
   const db = await idb()
   return new Promise((res, rej) => {
     const r = db.transaction('kv').objectStore('kv').get(key)
@@ -62,7 +62,7 @@ async function idbGet<T>(key: string): Promise<T | undefined> {
     r.onerror = () => rej(r.error)
   })
 }
-async function idbSet(key: string, value: unknown) {
+export async function idbSet(key: string, value: unknown) {
   const db = await idb()
   return new Promise<void>((res, rej) => {
     const tx = db.transaction('kv', 'readwrite')
@@ -176,6 +176,8 @@ export function useDoc() {
     })
   }, [])
   const replaceDoc = useCallback((doc: DocState) => commit(() => doc), [commit])
+  /** After saving: the saved file becomes the baseline for change tracking (no undo entry). */
+  const setFileInfo = useCallback((info: Partial<Pick<DocState, 'originalXml' | 'fileName'>>) => setState((s) => ({ ...s, ...info })), [])
 
   const { model, extras } = state
   const engine = useMemo(() => engineFor(model), [model.steps, model.catalogSteps]) // eslint-disable-line react-hooks/exhaustive-deps
@@ -492,6 +494,7 @@ export function useDoc() {
     actions,
     createsCycle,
     replaceDoc,
+    setFileInfo,
     undo,
     redo,
     canUndo: past.length > 0,

@@ -8,7 +8,8 @@ import { reviewState } from './components/common'
 import { Inspector } from './components/Inspector'
 import { DocContext, UIContext, type Selection, type Theme, type UI, type View } from './context'
 import type { Root } from './graph'
-import { migrateDoc, useDoc, type DocState } from './store'
+import { elementHash, idbGet, idbSet, migrateDoc, useDoc, type DocState } from './store'
+import { canSaveInPlace, download, isAbort, pickFileToOpen, pickFileToSave, writeFile, type FileHandle } from './files'
 import { computeRisks } from './tara/risk'
 import { emptyExtras } from './tara/types'
 import { Dashboard, ReviewView, SettingsView } from './views/Overview'
@@ -36,13 +37,6 @@ const KIND_VIEW: Record<string, View> = { step: 'steps', damage: 'damage', threa
 
 const PROJECT_FORMAT = 'xsam-tara-project'
 
-function download(name: string, text: string, type: string) {
-  const a = document.createElement('a')
-  a.href = URL.createObjectURL(new Blob([text], { type }))
-  a.download = name
-  a.click()
-  setTimeout(() => URL.revokeObjectURL(a.href), 1000)
-}
 
 export default function App() {
   const doc = useDoc()
@@ -51,6 +45,35 @@ export default function App() {
   const [root, setRoot] = useState<Root | null>(null)
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set())
   const fileRef = useRef<HTMLInputElement>(null)
+
+  // ---- files: handles of the opened/saved .xsam and project file, and what was last saved ----
+  const [handles, setHandles] = useState<{ xsam?: FileHandle; project?: FileHandle }>({})
+  const [savedModel, setSavedModel] = useState<unknown>(null)
+  const [savedProject, setSavedProject] = useState<{ m: unknown; x: unknown } | null>(null)
+  const [saveMsg, setSaveMsg] = useState<string | null>(null)
+  const restored = useRef(false)
+  const modelHash = (m: unknown) => elementHash(m)
+  useEffect(() => {
+    // Restore file handles and the saved state after a reload (handles live in IndexedDB).
+    if (!doc.loaded || restored.current) return
+    restored.current = true
+    idbGet<{ xsam?: FileHandle; project?: FileHandle; modelHash?: string; projectHash?: string }>('files')
+      .then((f) => {
+        if (!f) return
+        setHandles({ xsam: f.xsam, project: f.project })
+        if (f.modelHash && f.modelHash === modelHash(doc.model)) setSavedModel(doc.model)
+        if (f.projectHash && f.projectHash === modelHash({ m: doc.model, x: doc.extras })) setSavedProject({ m: doc.model, x: doc.extras })
+      })
+      .catch(() => {})
+  }, [doc.loaded]) // eslint-disable-line react-hooks/exhaustive-deps
+  const persistFiles = (h: { xsam?: FileHandle; project?: FileHandle }, model: unknown, project: { m: unknown; x: unknown } | null) =>
+    idbSet('files', { ...h, modelHash: model ? modelHash(model) : undefined, projectHash: project ? modelHash(project) : undefined }).catch(() => {})
+  const modelDirty = savedModel !== doc.model
+  const projectDirty = !savedProject || savedProject.m !== doc.model || savedProject.x !== doc.extras
+  const flash = (msg: string) => {
+    setSaveMsg(msg)
+    setTimeout(() => setSaveMsg(null), 3000)
+  }
   const [theme, setTheme] = useState<Theme>(() => {
     try {
       return localStorage.getItem('tara-theme') === 'dark' ? 'dark' : 'light'
@@ -99,6 +122,11 @@ export default function App() {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const tag = (e.target as HTMLElement).tagName
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 's') {
+        e.preventDefault()
+        saveRef.current(e.shiftKey)
+        return
+      }
       if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'z') {
         e.preventDefault()
@@ -111,13 +139,18 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey)
   }, [doc])
 
-  const openText = (text: string, fileName: string) => {
+  /** Returns what was opened (and whether TARA data was kept), or null when opening failed. */
+  const openText = (text: string, fileName: string): { kind: 'project' | 'xsam'; keptExtras: boolean } | null => {
     try {
       if (fileName.endsWith('.json')) {
         const p = JSON.parse(text)
         if (p.format !== PROJECT_FORMAT) throw new Error('Not a TARA project file')
         const migrated = migrateDoc({ model: p.model, extras: p.extras, originalXml: p.originalXml, fileName: p.fileName })
         doc.replaceDoc({ ...migrated, model: attachCatalog(migrated.model, sampleXml, 'APCatalog1.3') })
+        setRoot(null)
+        select(null)
+        setView('dashboard')
+        return { kind: 'project', keptExtras: true }
       } else {
         // Steps from the bundled APCatalog1.3 that the model references but doesn't define.
         const model = attachCatalog(parseXsam(text), sampleXml, 'APCatalog1.3')
@@ -127,21 +160,52 @@ export default function App() {
         const sameModel = !!model.modelRef && model.modelRef === doc.model.modelRef
         const keep = sameModel && hasWork && confirm(`${fileName} is a version of the open model (${model.projectName}). Keep your review, treatment, goals and security properties?`)
         doc.replaceDoc({ model, extras: keep ? doc.extras : emptyExtras(), originalXml: text, fileName })
+        setRoot(null)
+        select(null)
+        setView('dashboard')
+        return { kind: 'xsam', keptExtras: keep }
       }
-      setRoot(null)
-      select(null)
-      setView('dashboard')
     } catch (err) {
       alert((err as Error).message)
+      return null
     }
   }
 
-  const exportXsam = () => {
-    const xml = serializeXsam(doc.model, doc.originalXml)
-    download(doc.fileName.endsWith('.xsam') ? doc.fileName : `${doc.fileName}.xsam`, xml, 'application/xml')
+  const pendingOpen = useRef<{ kind: 'project' | 'xsam'; handles: { xsam?: FileHandle; project?: FileHandle } } | null>(null)
+  const openFile = async () => {
+    if (!canSaveInPlace()) return fileRef.current?.click()
+    try {
+      const f = await pickFileToOpen()
+      if (!f) return
+      const r = openText(f.text, f.name)
+      if (!r) return
+      const h = r.kind === 'project' ? { project: f.handle } : { xsam: f.handle, ...(r.keptExtras ? { project: handles.project } : {}) }
+      setHandles(h)
+      pendingOpen.current = { kind: r.kind, handles: h }
+    } catch (e) {
+      if (!isAbort(e)) alert((e as Error).message)
+    }
   }
-  const saveProject = () => {
-    const p: DocState & { format: string; version: number; savedAt: string } = {
+  useEffect(() => {
+    // After opening a file, the opened content is the saved state.
+    const p = pendingOpen.current
+    if (!p) return
+    pendingOpen.current = null
+    if (p.kind === 'xsam') {
+      setSavedModel(doc.model)
+      setSavedProject(null)
+      persistFiles(p.handles, doc.model, null)
+    } else {
+      setSavedModel(null)
+      setSavedProject({ m: doc.model, x: doc.extras })
+      persistFiles(p.handles, null, { m: doc.model, x: doc.extras })
+    }
+  }, [doc.model]) // eslint-disable-line react-hooks/exhaustive-deps
+
+  const xsamName = () => (doc.fileName.endsWith('.xsam') ? doc.fileName : `${doc.fileName.replace(/\.(xml|json)$/, '').replace(/\.tara$/, '')}.xsam`)
+  const projectName = () => `${xsamName().replace(/\.xsam$/, '')}.tara.json`
+  const projectJson = () =>
+    JSON.stringify({
       format: PROJECT_FORMAT,
       version: 1,
       savedAt: new Date().toISOString(),
@@ -149,9 +213,63 @@ export default function App() {
       extras: doc.extras,
       originalXml: doc.originalXml,
       fileName: doc.fileName,
+    } satisfies DocState & { format: string; version: number; savedAt: string })
+
+  /** Save the model to its .xsam (in place when it was opened from disk); otherwise download it. */
+  const saveXsam = async (as: boolean): Promise<FileHandle | undefined> => {
+    const xml = serializeXsam(doc.model, doc.originalXml)
+    if (!canSaveInPlace()) {
+      download(xsamName(), xml, 'application/xml')
+      return undefined
     }
-    download(`${doc.fileName.replace(/\.xsam$/, '')}.tara.json`, JSON.stringify(p), 'application/json')
+    const handle = !as && handles.xsam ? handles.xsam : await pickFileToSave('xsam', xsamName())
+    await writeFile(handle, xml)
+    // The saved file is the new baseline for change tracking.
+    doc.setFileInfo({ originalXml: xml, fileName: handle.name })
+    setSavedModel(doc.model)
+    return handle
   }
+  /** Save model + review, treatment, goals… as a project file. */
+  const saveProject = async (as: boolean): Promise<FileHandle | undefined> => {
+    const json = projectJson()
+    if (!canSaveInPlace()) {
+      download(projectName(), json, 'application/json')
+      return undefined
+    }
+    const handle = !as && handles.project ? handles.project : await pickFileToSave('project', projectName())
+    await writeFile(handle, json)
+    setSavedProject({ m: doc.model, x: doc.extras })
+    return handle
+  }
+  /** ⌘S: the .xsam, plus the project file when one is linked. ⇧⌘S: save the .xsam as… */
+  const save = async (as = false) => {
+    try {
+      const x = await saveXsam(as)
+      const p = handles.project && !as ? await saveProject(false) : undefined
+      const h = { ...handles, ...(x ? { xsam: x } : {}), ...(p ? { project: p } : {}) }
+      setHandles(h)
+      persistFiles(h, doc.model, p ? { m: doc.model, x: doc.extras } : savedProject)
+      flash(x ? `Saved ${[x.name, p?.name].filter(Boolean).join(' and ')}` : `Downloaded ${xsamName()}`)
+    } catch (e) {
+      if (!isAbort(e)) alert(`Saving failed: ${(e as Error).message}`)
+    }
+  }
+  const saveProjectNow = async (as: boolean) => {
+    try {
+      const p = await saveProject(as)
+      const h = { ...handles, ...(p ? { project: p } : {}) }
+      setHandles(h)
+      persistFiles(h, savedModel, { m: doc.model, x: doc.extras })
+      flash(p ? `Saved ${p.name}` : `Downloaded ${projectName()}`)
+    } catch (e) {
+      if (!isAbort(e)) alert(`Saving failed: ${(e as Error).message}`)
+    }
+  }
+  const saveRef = useRef(save)
+  useEffect(() => {
+    saveRef.current = save
+  })
+
   const exportRiskCsv = () => {
     const rows = computeRisks(doc.model, doc.extras, doc.engine)
     const q = (s: unknown) => `"${String(s ?? '').replace(/"/g, '""')}"`
@@ -193,6 +311,11 @@ export default function App() {
               <span className="file" title={doc.fileName}>
                 {doc.model.projectName}
               </span>
+              <span className="small muted" title={handles.xsam ? `Saves to ${handles.xsam.name}` : 'Not saved to a file yet'}>
+                {handles.xsam?.name ?? doc.fileName}
+                {modelDirty ? <span className="dirty" title="Unsaved changes"> ●</span> : null}
+              </span>
+              {saveMsg ? <span className="ok small">{saveMsg}</span> : null}
               {doc.saveError ? <span className="warn small">Autosave failed</span> : null}
             </div>
             <div className="tools">
@@ -205,17 +328,23 @@ export default function App() {
               <button onClick={doc.redo} disabled={!doc.canRedo} title="Redo (⇧⌘Z)">
                 ↷
               </button>
-              <button onClick={() => fileRef.current?.click()} title="Open an .xsam model or a saved .tara.json project">
+              <button onClick={openFile} title="Open an .xsam model or a saved .tara.json project">
                 Open…
               </button>
-              <button onClick={saveProject} title="Save model + treatment, goals, controls and review as one project file">
-                Save project
+              <button onClick={() => save(true)} title="Save the model as a new .xsam file (⇧⌘S)">
+                Save as…
+              </button>
+              <button
+                onClick={() => saveProjectNow(!handles.project)}
+                title={handles.project ? `Save review, treatment, goals… to ${handles.project.name}` : 'Save model + review, treatment, goals, controls as a project file'}
+              >
+                Save project{handles.project && projectDirty ? ' ●' : ''}
               </button>
               <button onClick={exportRiskCsv} title="Risk table as CSV">
                 Risks CSV
               </button>
-              <button className="primary" onClick={exportXsam} title="Write the model back to .xsam for MPS">
-                Export .xsam
+              <button className="primary" onClick={() => save(false)} title={handles.xsam ? `Save to ${handles.xsam.name} (⌘S)` : 'Save the model as .xsam for MPS (⌘S)'}>
+                Save{modelDirty ? ' ●' : ''}
               </button>
               <input
                 ref={fileRef}
@@ -283,7 +412,7 @@ export default function App() {
                     <div className="welcome">
                       <h2>Open a TARA model</h2>
                       <p>Open an MPS/XSAM export (.xsam) or a saved project (.tara.json). Everything stays in this browser.</p>
-                      <button className="primary" onClick={() => fileRef.current?.click()}>
+                      <button className="primary" onClick={openFile}>
                         Open…
                       </button>
                     </div>

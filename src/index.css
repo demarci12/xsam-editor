@@ -464,3 +464,5 @@ label.check input { width: auto; }
 .checklist-block { margin-bottom: 28px; }
 .cat-tag { font-size: 9px; color: var(--muted); font-weight: 400; }
 .pre { white-space: pre-wrap; }
+
+.dirty { color: var(--warn); }
